@@ -1,124 +1,128 @@
-import { Button, Link, buttonVariants } from '@heroui/react';
-import Globe from '@gravity-ui/icons/Globe';
-import LogoGithub from '@gravity-ui/icons/LogoGithub';
-import Moon from '@gravity-ui/icons/Moon';
+import { Link, RouterProvider, buttonVariants } from '@heroui/react';
 import ShieldCheck from '@gravity-ui/icons/ShieldCheck';
-import Sun from '@gravity-ui/icons/Sun';
 import { useLayoutEffect, useState } from 'react';
-import guide from '../../docs/en/for-agents.md?url&no-inline';
-import wordmarkLight from './brand/niltavi-logo-light.svg';
-import wordmarkDark from './brand/niltavi-logo-dark.svg';
+import type { ComponentProps, MouseEvent } from 'react';
+import { ProductFooter, ProductHeader } from '../vendor/niltavi-ui/product/ProductHeader';
+import { applyTheme, preferredTheme, saveTheme, systemDarkQuery } from '../vendor/niltavi-ui/product/theme';
+import type { ProductTheme } from '../vendor/niltavi-ui/product/theme';
 
-export const container = 'mx-auto w-full px-4 sm:max-w-[540px] md:max-w-[720px] lg:max-w-[960px] xl:max-w-[1140px] 2xl:max-w-[1320px]';
-
+export const container = 'niltavi-container';
 const repository = 'https://github.com/niltavi/niltavi-identity';
-const themePreference = window.matchMedia('(prefers-color-scheme: dark)');
-type Theme = 'light' | 'dark';
-type Language = 'en' | 'zh-CN';
+export const guideUrl = '/identity-assets/for-agents.md';
+export type Language = 'en' | 'zh-CN';
+export type Section = 'home' | 'login' | 'register' | 'workspace';
+export type Route = { language: Language; section: Section };
+export type Navigate = (route: Route, replace?: boolean) => void;
 
-const copy = {
+export const copy = {
   en: {
+    title: 'Niltavi Identity',
     heading: 'One account for your apps',
     description: 'Connect your apps with OpenID Connect. Users sign in once and can view or end their sessions in one place.',
-    signIn: 'Email sign-in', register: 'Register by email', install: 'Install with an agent',
-    dark: 'Switch to dark theme', light: 'Switch to light theme', language: '切换到简体中文', github: 'GitHub repository',
+    signIn: 'Sign in', register: 'Register by email', install: 'Install with an agent',
+    dark: 'Switch to dark theme', light: 'Switch to light theme', language: 'Language', github: 'GitHub repository',
   },
   'zh-CN': {
-    heading: <>一个账号，<wbr /><span className="whitespace-nowrap">登录多个应用</span></>,
+    title: 'Niltavi Identity · 统一登录',
+    heading: '一个账号，登录多个应用',
     description: '通过 OpenID Connect 接入你的应用。用户登录一次即可访问已接入的应用，并集中查看或结束自己的会话。',
-    signIn: '邮箱登录', register: '邮箱注册', install: '交给 Agent 安装',
-    dark: '切换到深色主题', light: '切换到浅色主题', language: 'Switch to English', github: 'GitHub 仓库',
+    signIn: '登录', register: '邮箱注册', install: '交给 Agent 安装',
+    dark: '切换到深色主题', light: '切换到浅色主题', language: '语言', github: 'GitHub 仓库',
   },
 };
 
+export function pathFor({ language, section }: Route) {
+  const base = language === 'zh-CN' ? '/zh' : '';
+  return base + (section === 'home' ? '/' : '/' + section);
+}
+
+export function routeFor(path: string): Route {
+  const segments = path.split('/').filter(Boolean);
+  const language = segments[0] === 'zh' ? 'zh-CN' : 'en';
+  const section = segments[language === 'zh-CN' ? 1 : 0];
+  return { language, section: section === 'login' || section === 'register' || section === 'workspace' ? section : 'home' };
+}
+
+export function followRoute(event: MouseEvent<Element>, route: Route, navigate?: Navigate) {
+  if (navigate && !event.defaultPrevented && event.button === 0 &&
+    !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+    event.preventDefault();
+    navigate(route);
+  }
+}
+
+export function RouteLink({ route, navigate, onClick, ...props }: Omit<ComponentProps<typeof Link>, 'href'> &
+  { route: Route; navigate?: Navigate | undefined; onClick?: ComponentProps<typeof Link>['onClick'] }) {
+  return <Link {...props} href={pathFor(route)} onClick={event => {
+    onClick?.(event);
+    followRoute(event, route, navigate);
+  }} />;
+}
+
 function useTheme() {
-  const [choice, setChoice] = useState<Theme | null>(() => {
-    const value = localStorage.getItem('identity.theme');
-    return value === 'light' || value === 'dark' ? value : null;
-  });
-  const [system, setSystem] = useState<Theme>(themePreference.matches ? 'dark' : 'light');
-  const theme = choice ?? system;
-
+  const [theme, setTheme] = useState<ProductTheme>('light');
   useLayoutEffect(() => {
-    const update = (event: MediaQueryListEvent) => setSystem(event.matches ? 'dark' : 'light');
-    themePreference.addEventListener('change', update);
-    return () => themePreference.removeEventListener('change', update);
+    const medium = window.matchMedia(systemDarkQuery);
+    function update() {
+      const current = preferredTheme();
+      applyTheme(current);
+      setTheme(current);
+    }
+    update();
+    medium.addEventListener('change', update);
+    return () => medium.removeEventListener('change', update);
   }, []);
-
-  useLayoutEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
 
   function toggle() {
     const next = theme === 'light' ? 'dark' : 'light';
-    localStorage.setItem('identity.theme', next);
-    setChoice(next);
+    saveTheme(next);
+    setTheme(next);
   }
-
   return { theme, toggle };
 }
 
-export function BrandHeader({ language, onLanguageChange }: { language: Language; onLanguageChange?: () => void }) {
+export function BrandHeader({ route, navigate, publicPage = false }: { route: Route; navigate?: Navigate; publicPage?: boolean }) {
+  const { language, section } = route;
   const { theme, toggle } = useTheme();
   const labels = copy[language];
-  const icon = { width: 18, height: 18, 'aria-hidden': true } as const;
-  const themeLabel = theme === 'light' ? labels.dark : labels.light;
-  return <header>
-    <div className={`${container} flex h-14 items-center justify-between gap-2 sm:h-16`}>
-      <Link href="/" className="gap-2 font-medium text-foreground no-underline focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-2 focus-visible:outline-focus sm:text-lg">
-        <ShieldCheck width={24} height={24} aria-hidden="true" />
-        <span>Identity</span>
-      </Link>
-      <div className="flex shrink-0 items-center gap-1">
-        <Button isIconOnly size="sm" variant="ghost" aria-label={themeLabel} onPress={toggle}>
-          {theme === 'light' ? <Moon {...icon} /> : <Sun {...icon} />}
-        </Button>
-        {onLanguageChange && <Button isIconOnly size="sm" variant="ghost" aria-label={labels.language} onPress={onLanguageChange}>
-          <Globe {...icon} />
-        </Button>}
-        <Link className={buttonVariants({ isIconOnly: true, size: 'sm', variant: 'ghost' })} href={repository}
-          aria-label={labels.github}>
-          <LogoGithub {...icon} />
-        </Link>
-      </div>
-    </div>
-  </header>;
+  const brandRoute = { language, section: section === 'workspace' ? 'workspace' : 'home' } as const;
+  const locales = [
+    { locale: 'en', label: 'English', href: pathFor({ language: 'en', section }) },
+    { locale: 'zh-CN', label: '简体中文', href: pathFor({ language: 'zh-CN', section }) },
+  ];
+  function navigateHref(href: string) {
+    const destination = new URL(href, window.location.href);
+    if (destination.origin === window.location.origin && navigate) navigate(routeFor(destination.pathname));
+    else window.location.assign(href);
+  }
+  const header = <ProductHeader
+    brand={{ name: 'Identity', href: pathFor(brandRoute), symbol: <ShieldCheck width={40} height={40} />,
+      onClick: event => followRoute(event, brandRoute, navigate) }}
+    labels={labels} theme={theme} onToggleTheme={toggle} githubHref={repository} locale={language} locales={locales}
+    variant={publicPage ? 'site' : 'app'}
+    {...(navigate ? { onNavigateLocale: navigateHref } : {})}
+    {...(publicPage ? { signIn: { href: pathFor({ language, section: 'login' }), label: labels.signIn } } : {})}
+  />;
+  return navigate ? <RouterProvider navigate={navigateHref}>{header}</RouterProvider> : header;
 }
 
 export function BrandFooter() {
-  return <footer className={`${container} flex justify-center py-8`}>
-    <Link href="https://niltavi.com/" aria-label="Niltavi">
-      <img src={wordmarkLight} width="72" height="26" alt="" className="dark:hidden" />
-      <img src={wordmarkDark} width="72" height="26" alt="" className="hidden dark:block" />
-    </Link>
-  </footer>;
+  return <ProductFooter lightLogo="/identity-assets/niltavi-logo-light.svg" darkLogo="/identity-assets/niltavi-logo-dark.svg" />;
 }
 
-export function Website() {
-  const [language, setLanguage] = useState<Language>(() => {
-    const saved = localStorage.getItem('identity.language');
-    return saved === 'en' || saved === 'zh-CN' ? saved : navigator.language.startsWith('zh') ? 'zh-CN' : 'en';
-  });
+export function Website({ language, navigate }: { language: Language; navigate: Navigate }) {
   const labels = copy[language];
-  useLayoutEffect(() => { document.documentElement.lang = language; }, [language]);
-
-  function switchLanguage() {
-    const next = language === 'en' ? 'zh-CN' : 'en';
-    localStorage.setItem('identity.language', next);
-    setLanguage(next);
-  }
-
-  return <div className="flex min-h-svh flex-col bg-background text-foreground">
-    <BrandHeader language={language} onLanguageChange={switchLanguage} />
-    <main className={`${container} flex flex-1 items-center py-16 sm:py-24`}>
-      <div className="grid max-w-2xl gap-6">
-        <h1 className="text-balance text-4xl font-medium tracking-tight sm:text-5xl lg:text-6xl">{labels.heading}</h1>
-        <p className="max-w-lg text-lg text-muted">{labels.description}</p>
-        <div className="flex flex-wrap items-center gap-3">
-          <Link className={buttonVariants({ variant: 'primary' })} href="/login">{labels.signIn}</Link>
-          <Link className={buttonVariants({ variant: 'secondary' })} href="/register">{labels.register}</Link>
-          <Link href={guide} hrefLang="en">{labels.install}<Link.Icon /></Link>
-        </div>
+  return <main className={`${container} flex flex-1 items-center py-16 sm:py-24`}>
+    <div className="grid max-w-2xl gap-6">
+      <h1 className="text-balance text-4xl font-medium tracking-tight sm:text-5xl lg:text-6xl">
+        {language === 'en' ? labels.heading : <><span className="whitespace-nowrap">一个账号，</span><wbr /><span className="whitespace-nowrap">登录多个应用</span></>}
+      </h1>
+      <p className="max-w-lg text-lg text-muted">{labels.description}</p>
+      <div className="flex flex-wrap items-center gap-3">
+        <Link className={buttonVariants({ variant: 'primary' })} href={guideUrl} hrefLang="en">{labels.install}<Link.Icon /></Link>
+        <RouteLink route={{ language, section: 'register' }} navigate={navigate}
+          className={buttonVariants({ variant: 'secondary' })}>{labels.register}</RouteLink>
       </div>
-    </main>
-    <BrandFooter />
-  </div>;
+    </div>
+  </main>;
 }

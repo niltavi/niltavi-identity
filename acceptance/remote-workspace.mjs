@@ -26,14 +26,18 @@ if (seed) {
   assert.equal(leaf.fingerprint256.replaceAll(':', '').toLowerCase(), required('IDENTITY_WORKSPACE_CERT_SHA256').toLowerCase());
 }
 const [memberLine, memberPasswordLine] = (await readFile(required('IDENTITY_WORKSPACE_CREDENTIAL_FILE'), 'utf8')).split(/\r?\n/);
-if (memberLine !== 'Email: acceptance@niltavi.test' || !/^Password: [^\s]+$/.test(memberPasswordLine ?? '')) {
+const member = required('IDENTITY_WORKSPACE_ACCOUNT_EMAIL').trim().toLowerCase();
+const mailDomain = required('IDENTITY_WORKSPACE_TEST_MAIL_DOMAIN').trim().toLowerCase();
+if (member.endsWith('.test') || !/^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.testenv\.niltavi\.com$/.test(mailDomain)) {
+  throw new Error('Use an authorized shared account and an isolated testenv mailbox domain.');
+}
+if (memberLine !== 'Email: ' + member || !/^Password: [^\s]+$/.test(memberPasswordLine ?? '')) {
   throw new Error('The protected acceptance credential file has an unexpected format.');
 }
-const member = 'acceptance@niltavi.test';
 const memberPassword = memberPasswordLine.slice('Password: '.length);
 const fixture = randomBytes(6).toString('hex');
-const email = `browser-${fixture}@niltavi.test`;
-const operator = `operator-${fixture}@niltavi.test`;
+const email = 'browser-' + fixture + '@' + mailDomain;
+const operator = 'operator-' + fixture + '@' + mailDomain;
 const password = randomBytes(24).toString('hex');
 const operatorPassword = randomBytes(24).toString('hex');
 await mkdir(evidence, { recursive: true });
@@ -83,7 +87,7 @@ async function person({ trusted = true, colorScheme = 'light', viewport = { widt
 
 async function open(options) {
   const page = await person(options);
-  const response = await page.goto(`${origin}/login`, { waitUntil: 'domcontentloaded', timeout: 25_000 });
+  const response = await page.goto(`${origin}/zh/login`, { waitUntil: 'domcontentloaded', timeout: 25_000 });
   assert.equal(response?.status(), 200);
   await page.getByRole('heading', { name: '邮箱登录' }).waitFor();
   return page;
@@ -93,7 +97,7 @@ async function signIn(page, address, value) {
   await page.getByLabel('邮箱', { exact: true }).fill(address);
   await page.getByLabel('密码', { exact: true }).fill(value);
   const [response] = await Promise.all([page.waitForResponse(r => r.url() === `${origin}/account/login`),
-    page.getByRole('button', { name: '登录', exact: true }).click()]);
+    page.getByRole('button', { name: '邮箱登录', exact: true }).click()]);
   return response.status();
 }
 
@@ -116,15 +120,15 @@ try {
   const fresh = await open();
   console.log(`Clean headless Firefox opened ${origin} with ${seed ? 'profile-local trust' : 'its normal trust store'}.`);
   await fresh.getByRole('link', { name: '邮箱注册' }).click();
-  assert.equal(new URL(fresh.url()).pathname, '/register');
+  assert.equal(new URL(fresh.url()).pathname, '/zh/register');
   await fresh.getByLabel('邮箱', { exact: true }).fill(email);
-  await fresh.getByRole('button', { name: '发送验证码' }).click();
+  await fresh.getByLabel('密码', { exact: true }).fill(password);
+  await fresh.getByRole('button', { name: '邮箱注册', exact: true }).click();
   await fresh.getByRole('heading', { name: '验证邮箱' }).waitFor();
   const code = await mailboxCode();
   await fresh.getByLabel('邮箱验证码').fill('X'.repeat(32));
-  await fresh.getByLabel('密码', { exact: true }).fill(password);
   await fresh.getByRole('button', { name: '验证并创建账号' }).click();
-  await fresh.getByText('验证码无效、已过期或已使用。').waitFor();
+  await fresh.getByText(/^验证码无效、已过期或已使用。/).waitFor();
   await fresh.getByLabel('邮箱验证码').fill(code);
   await fresh.getByRole('button', { name: '验证并创建账号' }).click();
   await fresh.getByText('邮箱已验证，账号已创建。请使用刚设置的密码登录。').waitFor();
@@ -208,8 +212,12 @@ try {
       if (node !== document.activeElement) throw new Error('The theme switch must be second in the keyboard order.');
     });
     await page.keyboard.press('Tab');
+    await page.getByRole('button', { name: '语言' }).evaluate(node => {
+      if (node !== document.activeElement) throw new Error('The language control must follow the theme control.');
+    });
+    await page.keyboard.press('Tab');
     await page.getByRole('link', { name: 'GitHub 仓库' }).evaluate(node => {
-      if (node !== document.activeElement) throw new Error('The repository link must be third in the keyboard order.');
+      if (node !== document.activeElement) throw new Error('The repository link must follow the language control.');
     });
     await page.keyboard.press('Tab');
     assert.equal(await page.getByLabel('邮箱', { exact: true }).evaluate(node => node === document.activeElement), true);

@@ -1,5 +1,9 @@
 # First-round identity service acceptance
 
+The [current account and OIDC contract](en/authentication.md) supersedes the endpoint details in the historical runs below. For the revised browser suite, build the server and site, set the dedicated lab database and the profile-local TLS variables below, then run `node acceptance/browser-auth.mjs`. It covers both locale URLs, keyboard and layout, delayed configuration and JavaScript, two isolated mailbox domains, workspace persistence and session boundaries. The built-site test runner can also target an authorized HTTPS URL directly with `node acceptance/website.mjs <origin>`.
+
+For a new remote pass, set `IDENTITY_WORKSPACE_ACCOUNT_EMAIL` to the authorized shared account and `IDENTITY_WORKSPACE_TEST_MAIL_DOMAIN` to the isolated mailbox domain configured for the deployment. The credentials file must list that exact account. The Mailpit overlay supports explicit sender, mailbox domain and recipient pattern via `IDENTITY_ACCEPTANCE_SMTP_FROM`, `IDENTITY_ACCEPTANCE_EMAIL_DOMAIN` and `IDENTITY_ACCEPTANCE_RECIPIENT_PATTERN`. Configure a dedicated operator domain through that overlay and pass the approved shared address as `IDENTITY_ACCEPTANCE_SHARED_EMAIL`. Keep test-only address fixtures local. Actual external delivery needs an authorized SMTP transport and approved recipients.
+
 The first round validates the embedded provider over real accounts and first-party clients and decides whether to extend it into the account MVP. The requirements are recorded in [ISSUE-92](https://app.notion.com/p/41e44fed58568181b1b4d3303d7f1395), [ISSUE-46 through ISSUE-48](https://app.notion.com/p/41e44fed5856817bb0b5c809a6dc17f0) and [ISSUE-116](https://app.notion.com/p/41e44fed585681db9dade68b0a56cf66).
 
 ## Required scenarios

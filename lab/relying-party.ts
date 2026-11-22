@@ -33,14 +33,14 @@ export async function buildRelyingParty(spec: LabClient, issuer: string, tls: La
     done(null, new URLSearchParams(body.toString()));
   });
 
-  async function authorize(): Promise<Authorization> {
+  async function authorize(scope = 'openid read', useResource = true): Promise<Authorization> {
     const verifier = oidc.randomPKCECodeVerifier();
     const state = oidc.randomState();
     const nonce = oidc.randomNonce();
     const url = oidc.buildAuthorizationUrl(configuration, {
       redirect_uri: spec.callback,
-      scope: 'openid read',
-      resource: spec.resource,
+      scope,
+      ...(useResource ? { resource: spec.resource } : {}),
       code_challenge: await oidc.calculatePKCECodeChallenge(verifier),
       code_challenge_method: 'S256',
       state,
@@ -50,12 +50,13 @@ export async function buildRelyingParty(spec: LabClient, issuer: string, tls: La
   }
 
   async function exchange(url: URL, flow: Authorization) {
+    const resource = flow.url.searchParams.get('resource');
     return oidc.authorizationCodeGrant(configuration, url, {
       pkceCodeVerifier: flow.verifier,
       expectedState: flow.state,
       expectedNonce: flow.nonce,
       idTokenExpected: true,
-    }, { resource: spec.resource });
+    }, resource ? { resource } : undefined);
   }
 
   function introspect(accessToken: string) {

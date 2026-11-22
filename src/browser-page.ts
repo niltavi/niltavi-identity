@@ -14,7 +14,7 @@ const contentTypes: Readonly<Record<string, string>> = {
 export const protocolPageCsp = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'";
 type ProtocolView = 'login' | 'logout' | 'signed-out';
 
-export async function registerBrowserPage(app: FastifyInstance) {
+export async function registerBrowserPage(app: FastifyInstance, issuer: URL) {
   const root = new URL('../web/dist/', import.meta.url);
   let page: string;
   try { page = await readFile(new URL('index.html', root), 'utf8'); }
@@ -24,18 +24,29 @@ export async function registerBrowserPage(app: FastifyInstance) {
   }
   const mount = '<div id="root"></div>';
   if (!page.includes(mount)) throw new Error('The browser bundle is missing its application root.');
-  for (const path of ['/', '/login', '/register']) {
-    app.get(path, async (_request, reply) => reply.header('content-security-policy', `${protocolPageCsp}; form-action 'self'`)
-      .type('text/html; charset=utf-8').send(page));
+  for (const [base, language] of [['', 'en'], ['/zh', 'zh-CN']] as const) {
+    for (const section of ['home', 'login', 'register', 'workspace']) {
+      const path = base + (section === 'home' ? '/' : '/' + section);
+      const html = (await readFile(new URL(section + '.' + language + '.html', root), 'utf8'))
+        .replaceAll('__IDENTITY_ORIGIN__', issuer.origin);
+      app.get(path, async (_request, reply) => reply.header('content-security-policy', `${protocolPageCsp}; form-action 'self'`)
+        .type('text/html; charset=utf-8').send(html));
+    }
   }
+  app.get('/zh', async (_request, reply) => reply.redirect('/zh/', 308));
+  app.get('/sitemap.xml', async (_request, reply) => reply.type('application/xml; charset=utf-8').send(
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' +
+    ['/', '/zh/'].map(path => '<url><loc>' + issuer.origin + path + '</loc></url>').join('') + '</urlset>'));
 
   const directory = new URL('identity-assets/', root);
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const type = contentTypes[extname(entry.name)];
     if (!entry.isFile() || !type || !/^[a-zA-Z0-9._-]+$/.test(entry.name)) continue;
     const asset = new URL(entry.name, directory);
-    app.get(`/identity-assets/${entry.name}`, async (_request, reply) => reply.header('cache-control',
-      'public, max-age=31536000, immutable').type(type).send(createReadStream(asset)));
+    const cache = /-[A-Za-z0-9_-]{8}\.(?:js|css)$/.test(entry.name) ? 'public, max-age=31536000, immutable' : 'no-cache';
+    app.get(`/identity-assets/${entry.name}`, async (_request, reply) => reply.header('cache-control', cache)
+      .type(type).send(createReadStream(asset)));
   }
 
   return (view: ProtocolView, invalid = false, providerForm?: string) => page.replace(mount,

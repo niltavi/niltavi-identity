@@ -40,8 +40,10 @@ async function audit(db: Queryable, action: string, target: string) {
   await db.query('INSERT INTO audit_events (action, target) VALUES ($1, $2)', [action, target]);
 }
 
+const migrationFiles = ['schema.sql', 'schema-browser.sql', 'schema-enrollment.sql'];
+
 export async function migrate(pool: Pool) {
-  const files = ['schema.sql', 'schema-browser.sql'];
+  const files = migrationFiles;
   const schemas = await Promise.all(files.map((file) => readFile(new URL(`../src/${file}`, import.meta.url), 'utf8')));
   return transaction(pool, async (db) => {
     await db.query('SELECT pg_advisory_xact_lock(2026112101)');
@@ -59,7 +61,7 @@ export async function migrate(pool: Pool) {
 }
 
 export async function assertSchema(pool: Pool) {
-  if (!(await pool.query('SELECT 1 FROM identity_migrations WHERE version = 2')).rowCount) {
+  if (!(await pool.query('SELECT 1 FROM identity_migrations WHERE version = $1', [migrationFiles.length])).rowCount) {
     throw new Error('Run identity migrate before serving traffic.');
   }
 }
@@ -115,8 +117,14 @@ export async function applyAccountEnabled(db: PoolClient, account: { id: string;
 export async function grantAcceptanceOperator(pool: Pool, operatorAddress: string, targetAddress: string) {
   const operator = normalizeEmail(operatorAddress);
   const target = normalizeEmail(targetAddress);
-  if (operator === target || [operator, target].some((email) => !email.endsWith('@niltavi.test') || email === 'acceptance@niltavi.test')) {
-    throw new Error('Use two different dedicated niltavi.test accounts. The shared account cannot be granted or targeted.');
+  const domain = process.env.IDENTITY_ACCEPTANCE_OPERATOR_DOMAIN?.trim().toLowerCase();
+  if (process.env.IDENTITY_DEPLOYMENT_PROFILE !== 'acceptance' || !domain) {
+    throw new Error('Acceptance operator grants require the acceptance profile and a dedicated mailbox domain.');
+  }
+  const shared = process.env.IDENTITY_ACCEPTANCE_SHARED_EMAIL?.trim().toLowerCase();
+  if (operator === target || [operator, target].some(email =>
+    !email.endsWith('@' + domain) || email === 'acceptance@' + domain || email === shared)) {
+    throw new Error('Use two different dedicated acceptance accounts. The shared account cannot be granted or targeted.');
   }
   return transaction(pool, async (db) => {
     const rows = await db.query<{ email: string; id: string }>('SELECT email, id FROM accounts WHERE email IN ($1, $2)', [operator, target]);

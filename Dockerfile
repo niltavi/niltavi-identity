@@ -6,6 +6,7 @@ RUN --mount=type=cache,id=niltavi-identity-npm,target=/root/.npm npm ci --prefer
 COPY tsconfig.json tsconfig.service.json ./
 COPY src/ src/
 COPY docs/en/for-agents.md docs/en/for-agents.md
+COPY docs/en/authentication.md docs/en/authentication.md
 COPY preview/src/theme/ preview/src/theme/
 COPY web/ web/
 RUN npm run build:service && npm run build:web

@@ -20,7 +20,7 @@ docker compose -p niltavi-identity -f compose.service.yaml up -d --wait
 
 Compose waits for PostgreSQL and applies the schema migrations before starting Identity. Back up PostgreSQL and the protected signing and encryption material. Test restoration on an isolated stack before relying on the backup.
 
-For email registration, keep the SMTP connection URL in a protected file and set `IDENTITY_SMTP_URL_FILE` to its in-container path, such as `/run/identity/smtp.url`. Set `IDENTITY_SMTP_FROM` to the authorized sender. Set `IDENTITY_REGISTRATION_DOMAIN` when enrollment is restricted to one domain. Without SMTP, existing users and accounts created by an operator can still sign in. Keep acceptance-only controls disabled.
+For email registration, keep the SMTP connection URL in a protected file and set `IDENTITY_SMTP_URL_FILE` to its in-container path, such as `/run/identity/smtp.url`. Set `IDENTITY_SMTP_FROM` to the authorized sender. Enable `IDENTITY_DEPLOYMENT_PROFILE=hosted` only on Niltavi's approved HTTPS domains. The default `self-hosted` profile supports your own HTTPS domain. Both profiles accept personal and work addresses that can be verified. Without SMTP, existing users and accounts created by an operator can still sign in. See the [browser and OIDC contract](authentication.md) for the separate acceptance profile.
 
 ## Verify the instance
 
@@ -46,4 +46,4 @@ Supply each first-party server-side application's exact HTTPS callback, post-log
 docker compose -p niltavi-identity -f compose.service.yaml restart identity
 ```
 
-Configure OIDC Discovery, Authorization Code with PKCE (`S256`), and `client_secret_basic`. Request `openid` and the registered resource's `read` scope. Verify sign-in in each connected app, central session reuse, and signed back-channel logout on both sites. See the [service acceptance runbook](../service-acceptance.md) for more checks and key rotation.
+Configure OIDC Discovery, Authorization Code with PKCE (`S256`), and `client_secret_basic`. Request `openid` and the registered resource's `read` scope. Request `email` when needed and retrieve the authorized email claims from UserInfo. Verify sign-in in each connected app, central session reuse, and signed back-channel logout on both sites. See the [service acceptance runbook](../service-acceptance.md) for more checks and key rotation.

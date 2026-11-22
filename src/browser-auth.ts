@@ -8,7 +8,9 @@ import { applyAccountEnabled, getLogin, loginRateAllowed, transaction } from './
 import { httpsUrl } from './settings.js';
 
 const sessionCookie = '__Host-niltavi-session';
+const enrollmentCookie = '__Host-niltavi-enrollment';
 const sessionSeconds = 43_200;
+const enrollmentSeconds = 900;
 const digest = (value: string) => createHash('sha256').update(value).digest('base64url');
 
 type Session = {
@@ -26,14 +28,14 @@ function emailAddress(value: string) {
   return email;
 }
 
-function sessionKey(request: FastifyRequest, keyForToken: (value: string) => string) {
+function readCookie(request: FastifyRequest, name: string) {
   const value = request.headers.cookie?.split(';').map((cookie) => cookie.trim())
-    .find((cookie) => cookie.startsWith(`${sessionCookie}=`))?.slice(sessionCookie.length + 1);
-  return value && /^[\w-]{43}$/.test(value) ? keyForToken(value) : undefined;
+    .find((cookie) => cookie.startsWith(name + '='))?.slice(name.length + 1);
+  return value && /^[\w-]{43}$/.test(value) ? value : undefined;
 }
 
-function setCookie(reply: FastifyReply, value: string, maxAge: number) {
-  reply.header('set-cookie', `${sessionCookie}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`);
+function setCookie(reply: FastifyReply, name: string, value: string, maxAge: number) {
+  reply.header('set-cookie', `${name}=${value}; Path=/; Max-Age=${maxAge}; HttpOnly; Secure; SameSite=Lax`);
 }
 
 async function session(pool: Pool, key: string | undefined) {
@@ -87,9 +89,16 @@ function failure(reply: FastifyReply, status: number, error: string) {
 
 export async function registerBrowserAuth(app: FastifyInstance, pool: Pool, issuer: URL, backupHash: string, realm?: string) {
   const keyForToken = (token: string) => digest(realm ? `${realm}\0${token}` : token);
-  const cookie = (request: FastifyRequest) => sessionKey(request, keyForToken);
+  const cookie = (request: FastifyRequest) => {
+    const value = readCookie(request, sessionCookie);
+    return value ? keyForToken(value) : undefined;
+  };
   const deliver = await mailDelivery();
   const allowedDomain = process.env.IDENTITY_REGISTRATION_DOMAIN?.trim().toLowerCase();
+  if ((allowedDomain || process.env.IDENTITY_ACCEPTANCE_OPERATORS === 'true') &&
+    process.env.IDENTITY_DEPLOYMENT_PROFILE !== 'acceptance') {
+    throw new Error('Registration domain restrictions and acceptance operators require the acceptance profile.');
+  }
   if (allowedDomain) emailAddress(`mail@${allowedDomain}`);
   const applications = [['应用 A', process.env.IDENTITY_RP_A_URL], ['应用 B', process.env.IDENTITY_RP_B_URL]]
     .flatMap(([name, url]) => name && url ? [{ name, url: httpsUrl(url, 'Application URL').href }] : []);
@@ -106,57 +115,64 @@ export async function registerBrowserAuth(app: FastifyInstance, pool: Pool, issu
     const key = cookie(request);
     const current = await session(pool, key);
     if (current) return { account: current };
-    if (key) setCookie(reply, '', 0);
+    if (key) setCookie(reply, sessionCookie, '', 0);
     return failure(reply, 401, 'sign_in_required');
   });
 
   app.post('/account/register', { preHandler: origin }, async (request, reply) => {
     if (!deliver) return failure(reply, 503, 'registration_unavailable');
-    const fields = body(request, 'email');
+    const fields = body(request, 'email', 'password');
     let email: string;
     try { email = emailAddress(fields?.[0] ?? ''); }
     catch { return failure(reply, 400, 'invalid_email'); }
     if (allowedDomain && email.split('@')[1] !== allowedDomain) return failure(reply, 400, 'registration_domain');
     if (!await loginRateAllowed(pool, request.ip, email, 'register', 5)) return failure(reply, 429, 'try_later');
+    let hash: string;
+    try { hash = await passwordHash(fields?.[1] ?? ''); }
+    catch { return failure(reply, 400, 'invalid_password'); }
+    const enrollment = randomBytes(32).toString('base64url');
     if (!await getLogin(pool, email)) {
       const token = randomBytes(24).toString('base64url');
       const key = digest(token);
       await pool.query('DELETE FROM email_registrations WHERE expires_at <= now()');
-      await pool.query(`INSERT INTO email_registrations VALUES ($1, $2, now() + interval '15 minutes')`, [key, email]);
+      await pool.query(`INSERT INTO email_registrations (token_digest, email, expires_at, enrollment_digest, password_hash)
+        VALUES ($1, $2, now() + $3 * interval '1 second', $4, $5)`, [key, email, enrollmentSeconds, keyForToken(enrollment), hash]);
       try { await deliver(email, token); }
       catch {
         await pool.query('DELETE FROM email_registrations WHERE token_digest = $1', [key]);
         return failure(reply, 503, 'delivery_unavailable');
       }
     }
+    setCookie(reply, enrollmentCookie, enrollment, enrollmentSeconds);
     return reply.code(202).send({ accepted: true });
   });
 
   app.post('/account/verify', { preHandler: origin }, async (request, reply) => {
-    const fields = body(request, 'email', 'code', 'password');
+    const fields = body(request, 'email', 'code');
     let email: string;
     try { email = emailAddress(fields?.[0] ?? ''); }
     catch { return failure(reply, 400, 'invalid_email'); }
-    const [, code, password] = fields ?? [];
-    if (!code || !/^[\w-]{32}$/.test(code)) return failure(reply, 400, 'invalid_code');
+    const [, code] = fields ?? [];
+    const enrollment = readCookie(request, enrollmentCookie);
+    if (!enrollment || !code || !/^[\w-]{32}$/.test(code)) return failure(reply, 400, 'invalid_code');
     if (!await loginRateAllowed(pool, request.ip, email, 'verify', 12)) return failure(reply, 429, 'try_later');
     const key = digest(code);
-    if (!(await pool.query('SELECT 1 FROM email_registrations WHERE email = $1 AND token_digest = $2 AND expires_at > now()',
-      [email, key])).rowCount) return failure(reply, 400, 'invalid_code');
-    let hash: string;
-    try { hash = await passwordHash(password ?? ''); }
-    catch { return failure(reply, 400, 'invalid_password'); }
     const created = await transaction(pool, async (db) => {
-      if (!(await db.query('DELETE FROM email_registrations WHERE email = $1 AND token_digest = $2 AND expires_at > now()',
-        [email, key])).rowCount) return false;
+      const attempt = (await db.query<{ password_hash: string }>(
+        `DELETE FROM email_registrations WHERE email = $1 AND token_digest = $2 AND enrollment_digest = $3
+          AND expires_at > now() AND password_hash IS NOT NULL RETURNING password_hash`,
+        [email, key, keyForToken(enrollment)])).rows[0];
+      if (!attempt) return false;
       const id = randomUUID();
       const result = await db.query(`INSERT INTO accounts (id, email, password_hash, email_verified_at)
-        VALUES ($1, $2, $3, now()) ON CONFLICT (email) DO NOTHING`, [id, email, hash]);
+        VALUES ($1, $2, $3, now()) ON CONFLICT (email) DO NOTHING`, [id, email, attempt.password_hash]);
       if (result.rowCount) await db.query(`INSERT INTO audit_events (action, target, actor)
         VALUES ('account.email_registered', $1, $1)`, [id]);
       return Boolean(result.rowCount);
     });
-    return created ? reply.code(201).send({ created: true }) : failure(reply, 400, 'invalid_code');
+    if (!created) return failure(reply, 400, 'invalid_code');
+    setCookie(reply, enrollmentCookie, '', 0);
+    return reply.code(201).send({ created: true });
   });
 
   app.post('/account/login', { preHandler: origin }, async (request, reply) => {
@@ -181,14 +197,14 @@ export async function registerBrowserAuth(app: FastifyInstance, pool: Pool, issu
       return true;
     });
     if (!established) return failure(reply, 401, 'invalid_credentials');
-    setCookie(reply, token, sessionSeconds);
+    setCookie(reply, sessionCookie, token, sessionSeconds);
     return reply.code(204).send();
   });
 
   app.post('/account/logout', { preHandler: origin }, async (request, reply) => {
     const key = cookie(request);
     if (key) await pool.query('DELETE FROM web_sessions WHERE token_digest = $1', [key]);
-    setCookie(reply, '', 0);
+    setCookie(reply, sessionCookie, '', 0);
     return reply.code(204).send();
   });
 
@@ -208,7 +224,7 @@ export async function registerBrowserAuth(app: FastifyInstance, pool: Pool, issu
       await db.query(`INSERT INTO audit_events (action, target, actor) VALUES ('account.sessions_ended', $1, $1)`, [account.id]);
       return true;
     });
-    setCookie(reply, '', 0);
+    setCookie(reply, sessionCookie, '', 0);
     return ended ? reply.code(204).send() : failure(reply, 401, 'sign_in_required');
   });
 

@@ -43,6 +43,12 @@ export async function service(pool: Pool) {
   if (gatewayIssuer && (gatewayIssuer.href !== `${gatewayIssuer.origin}/` || gatewayIssuer.host === issuer.host)) {
     throw new Error('The gateway issuer must be a distinct HTTPS origin.');
   }
+  const profile = process.env.IDENTITY_DEPLOYMENT_PROFILE ?? 'self-hosted';
+  if (!['self-hosted', 'hosted', 'acceptance'].includes(profile)) throw new Error('Unknown Identity deployment profile.');
+  if (profile === 'hosted' && [issuer, ...(gatewayIssuer ? [gatewayIssuer] : [])].some(({ hostname }) =>
+    hostname !== 'niltavi.com' && !hostname.endsWith('.niltavi.com'))) {
+    throw new Error('The hosted profile requires HTTPS issuers on niltavi.com.');
+  }
   const gateway = gatewayIssuer ? await application(pool, gatewayIssuer, tls.options, gatewayIssuer.origin) : undefined;
   await gateway?.ready();
   const routeGateway = gateway && gatewayIssuer ? {
@@ -130,7 +136,8 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
       Grant: 43_200, RefreshToken: 43_200, Session: 43_200,
     },
     pkce: { required: () => true },
-    scopes: ['openid'],
+    scopes: ['openid', 'email'],
+    claims: { email: ['email', 'email_verified'] },
     expiresWithSession: () => true,
     issueRefreshToken: (_ctx, client) => client.grantTypeAllowed('refresh_token'),
     rotateRefreshToken: true,
@@ -169,7 +176,11 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
       },
     },
     async findAccount(_ctx, id) {
-      if (await store.isEnabled(id)) return { accountId: id, claims: () => ({ sub: id }) };
+      const account = (await pool.query<{ email: string; email_verified: boolean; security_epoch: number }>(
+        'SELECT email, email_verified_at IS NOT NULL AS email_verified, security_epoch FROM accounts WHERE id = $1 AND enabled', [id])).rows[0];
+      if (account && store.remember(id, account.security_epoch)) {
+        return { accountId: id, claims: () => ({ sub: id, email: account.email, email_verified: account.email_verified }) };
+      }
     },
     async loadExistingGrant(ctx) {
       const { client, session, result } = ctx.oidc;
@@ -177,9 +188,16 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
       if (!session?.accountId || !entry) return;
       const id = result?.consent?.grantId ?? session.grantIdFor(entry.id);
       const existing = id && await provider.Grant.find(id);
-      if (existing) return existing;
+      const requestedEmail = ctx.oidc.requestParamScopes.has('email');
+      if (existing) {
+        if (requestedEmail && !existing.getOIDCScope().split(' ').includes('email')) {
+          existing.addOIDCScope('email');
+          await existing.save();
+        }
+        return existing;
+      }
       const grant = new provider.Grant({ clientId: entry.id, accountId: session.accountId });
-      grant.addOIDCScope('openid');
+      grant.addOIDCScope(requestedEmail ? 'openid email' : 'openid');
       grant.addResourceScope(entry.resource, 'read');
       await grant.save();
       return grant;
@@ -211,7 +229,7 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     }
   });
   await registerBrowserAuth(app, pool, issuer, backupHash, realm);
-  protocolUi = await registerBrowserPage(app);
+  protocolUi = await registerBrowserPage(app, issuer);
   app.get<{ Params: { uid: string } }>('/interaction/:uid', async (request, reply) => store.request(async () => {
     const details = await provider.interactionDetails(request.raw, reply.raw).catch(() => undefined);
     if (!details || details.uid !== request.params.uid || details.prompt.name !== 'login') {

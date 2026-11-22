@@ -1,6 +1,7 @@
-@import "../../preview/src/theme/index.css";
+@import "../vendor/niltavi-ui/theme/index.css";
 @source "./main.tsx";
 @source "./site.tsx";
+@source "../vendor/niltavi-ui/product";
 
 @theme {
   --breakpoint-*: initial;

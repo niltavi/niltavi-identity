@@ -50,8 +50,8 @@ async function expectLogin(page: Page, rp: RP) {
   await expect(page).toHaveURL(`${rp.spec.origin}/`);
 }
 
-async function issueCode(page: Page, rp: RP) {
-  const flow = await rp.authorize();
+async function issueCode(page: Page, rp: RP, scope?: string, useResource?: boolean) {
+  const flow = await rp.authorize(scope, useResource);
   rp.holdCallback(flow.state);
   await page.goto(flow.url.href);
   const redirect = rp.takeCallback(flow.state);
@@ -169,8 +169,8 @@ test('provisioned accounts and clients survive restart with real OIDC, revocatio
       writeFile(passwordPath, pass, { mode: 0o600 }),
     ]);
     await test.step('Provision through the operator CLI and reject repeats/invalid registration', async () => {
-      await expect(cli('migrate')).resolves.toEqual({ version: 2, changed: true });
-      await expect(cli('migrate')).resolves.toEqual({ version: 2, changed: false });
+      await expect(cli('migrate')).resolves.toEqual({ version: 3, changed: true });
+      await expect(cli('migrate')).resolves.toEqual({ version: 3, changed: false });
       await cli('keys', 'init');
       await expect(cli('keys', 'init')).rejects.toThrow('already exists');
       accountId = (await cli<{ id: string }>('account', 'create', email)).id;
@@ -207,6 +207,23 @@ test('provisioned accounts and clients survive restart with real OIDC, revocatio
       const token = await serverSession(page, a);
       expect((await a.introspect(token.accessToken)).active).toBe(true);
       expect((await b.introspect(token.accessToken)).active).toBe(false);
+    });
+
+    await test.step('Return UserInfo email only when the client requests the email scope', async () => {
+      const metadata = await fetch(issuer + '/.well-known/openid-configuration').then(r => r.json()) as
+        { scopes_supported: string[]; userinfo_endpoint: string };
+      expect(metadata.scopes_supported).toContain('email');
+      for (const scope of ['openid email', 'openid']) {
+        const claimPage = await context.newPage();
+        try {
+          const { flow, redirect } = await issueCode(claimPage, a, scope, false);
+          const token = await a.exchange(redirect, flow);
+          const response = await fetch(metadata.userinfo_endpoint, { headers: { authorization: 'Bearer ' + token.access_token } });
+          expect(response.status).toBe(200);
+          const claims = await response.json();
+          expect(claims).toEqual(scope === 'openid email' ? { sub: accountId, email, email_verified: false } : { sub: accountId });
+        } finally { await claimPage.close(); }
+      }
     });
 
     await test.step('Keep the issuer, client, account and center session across provider restart', async () => {
