@@ -199,7 +199,7 @@ try {
       await page.setViewportSize({ width, height: 800 });
       const result = await page.evaluate(() => ({ width: document.querySelector('main').getBoundingClientRect().width,
         scroll: document.documentElement.scrollWidth, theme: document.documentElement.dataset.theme,
-        background: getComputedStyle(document.body.firstElementChild.firstElementChild).backgroundColor }));
+        background: getComputedStyle(document.querySelector('#root > div')).backgroundColor }));
       assert.deepEqual([result.width, result.scroll <= width, result.theme], [expected, true, theme]);
       backgrounds.add(result.background);
     }
