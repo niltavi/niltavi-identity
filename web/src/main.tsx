@@ -316,7 +316,7 @@ export function BrowserApp({ initial }: { initial: Route }) {
     document.querySelector('link[rel=canonical]')?.setAttribute('href', new URL(pathFor(route), window.location.origin).href);
     for (const alternate of document.querySelectorAll<HTMLLinkElement>('link[rel=alternate][hreflang]')) {
       const language = alternate.hreflang === 'zh-CN' ? 'zh-CN' : 'en';
-      alternate.href = pathFor({ language, section: route.section });
+      alternate.href = new URL(pathFor({ language, section: route.section }), window.location.origin).href;
     }
     document.querySelector('meta[name=robots]')?.setAttribute('content', route.section === 'home' ? 'index,follow' : 'noindex');
   }, [route]);
