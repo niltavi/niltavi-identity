@@ -1,0 +1,8 @@
+services:
+  identity:
+    environment:
+      IDENTITY_TLS_LIVE_DIR: /run/niltavi-public-ip/current
+    group_add:
+      - '987'
+    volumes:
+      - /opt/niltavi-acceptance/public-ip-tls:/run/niltavi-public-ip:ro

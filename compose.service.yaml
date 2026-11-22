@@ -1,0 +1,64 @@
+x-identity: &identity
+  build: .
+  image: niltavi-identity:local
+  environment:
+    IDENTITY_DATABASE_URL_FILE: /run/identity/database.url
+    IDENTITY_ISSUER: ${IDENTITY_ISSUER:?set the public HTTPS issuer}
+    IDENTITY_HOST: 0.0.0.0
+    IDENTITY_PORT: 8443
+    IDENTITY_SECRETS_DIR: /run/identity/secrets
+    IDENTITY_TLS_CERT_FILE: /run/identity/tls.crt
+    IDENTITY_TLS_KEY_FILE: /run/identity/tls.key
+    IDENTITY_SMTP_URL_FILE: ${IDENTITY_SMTP_URL_FILE:-}
+    IDENTITY_SMTP_CA_FILE: ${IDENTITY_SMTP_CA_FILE:-}
+    IDENTITY_SMTP_FROM: ${IDENTITY_SMTP_FROM:-}
+    IDENTITY_REGISTRATION_DOMAIN: ${IDENTITY_REGISTRATION_DOMAIN:-}
+    IDENTITY_ACCEPTANCE_OPERATORS: ${IDENTITY_ACCEPTANCE_OPERATORS:-false}
+    IDENTITY_RP_A_URL: ${IDENTITY_RP_A_URL:-}
+    IDENTITY_RP_B_URL: ${IDENTITY_RP_B_URL:-}
+  volumes:
+    - ${IDENTITY_DEPLOY_DIR:?set the directory with deployment files}:/run/identity:ro
+
+services:
+  db:
+    image: postgres:18.7@sha256:eb63372c1e05c755f55fa30cbd07aecc443676fc6c0fa90b9002d01537841e1a
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: identity
+      POSTGRES_DB: identity
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - identity-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "identity", "-d", "identity"]
+      start_period: 60s
+      interval: 2s
+      timeout: 5s
+      retries: 20
+  migrate:
+    <<: *identity
+    command: ["migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+  identity:
+    <<: *identity
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "${IDENTITY_PUBLISH_ADDRESS:-127.0.0.1}:${IDENTITY_PUBLISHED_PORT:-36100}:8443"
+    healthcheck:
+      test: ["CMD", "node", "dist/probe.js"]
+      interval: 3s
+      timeout: 4s
+      retries: 20
+
+volumes:
+  identity-data:
+
+secrets:
+  postgres_password:
+    file: ${IDENTITY_DEPLOY_DIR:?set the directory with deployment files}/postgres.password
