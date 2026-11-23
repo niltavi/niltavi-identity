@@ -98,7 +98,7 @@ export async function registerBrowserAuth(app: FastifyInstance, pool: Pool, issu
   };
   const testenvSignup = registrationEnabled && testenvSignupAllowed(issuer);
   const deliver = !registrationEnabled || testenvSignup ? undefined : await mailDelivery();
-  const allowedDomain = process.env.IDENTITY_REGISTRATION_DOMAIN?.trim().toLowerCase();
+  const allowedDomain = process.env.IDENTITY_REGISTRATION_DOMAIN?.trim().toLowerCase() || undefined;
   if ((allowedDomain || process.env.IDENTITY_ACCEPTANCE_OPERATORS === 'true') &&
     process.env.IDENTITY_DEPLOYMENT_PROFILE !== 'acceptance') {
     throw new Error('Registration domain restrictions and acceptance operators require the acceptance profile.');
