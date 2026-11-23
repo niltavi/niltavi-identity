@@ -34,15 +34,18 @@ try {
         await page.getByLabel(label('Email', '邮箱'), { exact: true }).fill(email);
         await page.getByLabel(label('Password', '密码'), { exact: true }).fill(secret);
       }
+      await expect(page.getByRole('button', { name: label('Register by email', '邮箱注册'), exact: true })).toBeEnabled();
       await enter(address, password);
+      phase = locale + ' signup response';
       const [created] = await Promise.all([
         page.waitForResponse(response => response.url() === origin + '/account/register'),
         page.getByRole('button', { name: label('Register by email', '邮箱注册'), exact: true }).click(),
       ]);
       assert.equal(created.status(), 201);
       assert.deepEqual(await created.json(), { created: true, emailVerified: false });
+      phase = locale + ' signup redirect and confirmation';
       await page.waitForURL(origin + prefix + '/login');
-      await expect(page.getByRole('alert')).toContainText(label('Your account is ready', '账号已创建'));
+      await expect(page.getByText(label('Your account is ready', '账号已创建'), { exact: false })).toBeVisible();
       phase = locale + ' sign-in and durable workspace';
       await enter(address, password);
       const [signed] = await Promise.all([

@@ -13,6 +13,12 @@ Start normal authorization to sign in. Identity's login interaction offers **Reg
 | `flagstone` | `https://flagstone.testenv.niltavi.com/api/identity/callback` | `https://flagstone.testenv.niltavi.com/api/identity/signed-out` | `https://flagstone.testenv.niltavi.com/api/identity/backchannel-logout` |
 | `wattlework` | `https://wattlework.testenv.niltavi.com/auth/oidc/callback` | `https://wattlework.testenv.niltavi.com/login` | `https://wattlework.testenv.niltavi.com/auth/oidc/backchannel-logout` |
 
+## Public acceptance
+
+Open [Flagstone's sign-in](https://flagstone.testenv.niltavi.com/api/identity/start) in a fresh browser, choose **Register by email**, and enter a new test address and password. After registration, select **Continue** to return to Flagstone. In the same browser, [sign in to Wattlework](https://wattlework.testenv.niltavi.com/auth/oidc/start). It should open the workspace without asking for a password and grant the member role. Sign out of all applications from Wattlework and confirm the Identity prompt. Both applications should require sign-in again.
+
+For automated checks, install the repository dependencies and Playwright Firefox, then run `node acceptance/public-testenv-onboarding.mjs` for standalone English and Chinese signup or `node acceptance/public-two-app-sso.mjs` for both applications. The second script also verifies that the continuation is bound to its original browser. It explicitly adds `prompt=create` to a fresh Wattlework authorization to exercise that optional provider feature. It requires the existing authorized `1panel` SSH alias and `IDENTITY_WLAN_IPV4` for the read-only subject check on the Windows acceptance host.
+
 ## Browser API
 
 On testenv, `POST /account/register` with JSON `{email,password}` returns `201` with `created=true` and `emailVerified=false`. An active, browser-bound authorization also returns a same-origin `continueTo` path. Existing addresses return `409 email_in_use`. Account creation leaves the existing session unchanged. Sign in at `/login` to create a workspace session, or complete the attached OIDC interaction. The homepage, registration, login and workspace also have directly accessible Chinese routes under `/zh/`.
