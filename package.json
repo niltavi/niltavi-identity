@@ -52,6 +52,7 @@
     "nodemailer": "10.6.1",
     "oidc-provider": "9.15.1",
     "pg": "8.23.1",
+    "tencentcloud-sdk-nodejs-ses": "4.1.271",
     "undici": "7.30.2"
   }
 }

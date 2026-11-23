@@ -2,32 +2,34 @@ import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:https';
 import type { Server as HttpsServer } from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { isIP } from 'node:net';
 import { join } from 'node:path';
 import Fastify from 'fastify';
-import type { FastifyReply, FastifyServerFactory } from 'fastify';
-import Provider, { errors } from 'oidc-provider';
+import type { FastifyReply, FastifyRequest, FastifyServerFactory } from 'fastify';
+import Provider, { errors, interactionPolicy } from 'oidc-provider';
 import type { ClientMetadata, Configuration } from 'oidc-provider';
 import { Agent } from 'undici';
 import type { Pool } from 'pg';
-import { registerBrowserAuth } from './browser-auth.js';
+import { registerBrowserAuth, testenvSignupAllowed } from './browser-auth.js';
 import { protocolPageCsp, registerBrowserPage } from './browser-page.js';
 import { assertSchema, getLogin, listApplications, loginRateAllowed } from './database.js';
 import { normalizeEmail, openClientSecret, passwordHash, verifyPassword } from './credentials.js';
 import { createProtocolStore } from './protocol-store.js';
+import { beginRegistrationIntent, intentDigest, oidcInteractionSeconds, validInteractionUid } from './registration-intent.js';
 import { httpsUrl, loadKeyRing, loadSecretEncryptionKey, required, secretDirectory } from './settings.js';
 import { identityTls, watchTls } from './tls.js';
 import type { IdentityTls } from './tls.js';
 
-function page(title: string, markup: string) {
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><title>${title}</title>
+function page(title: string, markup: string, language: 'en' | 'zh-CN' = 'en') {
+  return `<!doctype html><html lang="${language}"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>
   <main><h1>${title}</h1>${markup}</main></html>`;
 }
 
-function loginForm(error = false) {
+function loginForm(error = false, registration?: string) {
   return page('Sign in to Niltavi Identity', `${error ? '<p>Credentials were not accepted.</p>' : ''}
     <form method="post"><p><label>Email <input type="email" name="email" required autocomplete="username"></label></p>
     <p><label>Password <input type="password" name="password" required autocomplete="current-password"></label></p>
-    <button type="submit">Sign in</button></form>`);
+    <button type="submit">Sign in</button></form>${registration ? '<a href="' + registration + '">Register by email</a>' : ''}`);
 }
 
 export async function service(pool: Pool) {
@@ -45,9 +47,14 @@ export async function service(pool: Pool) {
   }
   const profile = process.env.IDENTITY_DEPLOYMENT_PROFILE ?? 'self-hosted';
   if (!['self-hosted', 'hosted', 'acceptance'].includes(profile)) throw new Error('Unknown Identity deployment profile.');
-  if (profile === 'hosted' && [issuer, ...(gatewayIssuer ? [gatewayIssuer] : [])].some(({ hostname }) =>
-    hostname !== 'niltavi.com' && !hostname.endsWith('.niltavi.com'))) {
+  const official = ({ hostname }: URL) => hostname === 'niltavi.com' || hostname.endsWith('.niltavi.com');
+  const canonical = profile === 'hosted' && gatewayIssuer && official(gatewayIssuer) && isIP(issuer.hostname) ? gatewayIssuer : undefined;
+  if (profile === 'hosted' && ((!official(issuer) && !canonical) || (gatewayIssuer && !official(gatewayIssuer)))) {
     throw new Error('The hosted profile requires HTTPS issuers on niltavi.com.');
+  }
+  if (process.env.IDENTITY_TESTENV_UNVERIFIED_SIGNUP === 'true' &&
+    ![issuer, ...(gatewayIssuer ? [gatewayIssuer] : [])].some(testenvSignupAllowed)) {
+    throw new Error('Unverified signup is reserved for the Identity testenv origin.');
   }
   const gateway = gatewayIssuer ? await application(pool, gatewayIssuer, tls.options, gatewayIssuer.origin) : undefined;
   await gateway?.ready();
@@ -55,7 +62,7 @@ export async function service(pool: Pool) {
     host: gatewayIssuer.host,
     route: (request: IncomingMessage, response: ServerResponse) => gateway.routing(request, response),
   } : undefined;
-  const app = await application(pool, issuer, tls.options, undefined, routeGateway);
+  const app = await application(pool, issuer, tls.options, undefined, routeGateway, canonical);
   let stopTls: (() => void) | undefined;
   app.addHook('onClose', async () => {
     stopTls?.();
@@ -69,7 +76,7 @@ export async function service(pool: Pool) {
 async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: string, gateway?: {
   host: string;
   route: (request: IncomingMessage, response: ServerResponse) => void;
-}) {
+}, canonical?: URL) {
   const directory = secretDirectory();
   const [ring, encryptionKey, cookieKey, applications, backupHash] = await Promise.all([
     loadKeyRing(directory),
@@ -81,10 +88,15 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
   if (Buffer.from(cookieKey.trim(), 'base64url').length < 32) throw new Error('The cookie signing key is too short.');
 
   let protocolUi: Awaited<ReturnType<typeof registerBrowserPage>>;
-  const loginPage = (invalid = false) => protocolUi?.('login', invalid) ?? loginForm(invalid);
-  function sendLogin(reply: FastifyReply, status = 200) {
+  const signup = !canonical && (testenvSignupAllowed(issuer) || Boolean(process.env.IDENTITY_TENCENT_SES_CONFIG_FILE) ||
+    process.env.IDENTITY_DEPLOYMENT_PROFILE !== 'hosted' && Boolean(process.env.IDENTITY_SMTP_URL_FILE));
+  const loginPage = (invalid = false, uid?: string) => {
+    const registration = signup && uid && validInteractionUid(uid) ? '/interaction/' + uid + '/register' : undefined;
+    return protocolUi?.('login', invalid, undefined, registration) ?? loginForm(invalid, protocolUi ? registration : undefined);
+  };
+  function sendLogin(reply: FastifyReply, status = 200, uid?: string) {
     if (protocolUi) reply.header('content-security-policy', protocolPageCsp);
-    return reply.code(status).type('text/html').send(loginPage(status !== 200));
+    return reply.code(status).type('text/html').send(loginPage(status !== 200, uid));
   }
 
   const store = createProtocolStore(pool, realm);
@@ -121,6 +133,8 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     };
   }
 
+  const policy = interactionPolicy.base();
+  if (signup) policy.add(new interactionPolicy.Prompt({ name: 'create', requestable: true }), 0);
   const provider = new Provider(issuer.origin, {
     ...wire,
     adapter: store.Adapter,
@@ -132,7 +146,7 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
       short: { httpOnly: true, sameSite: 'lax', secure: true },
     },
     ttl: {
-      AccessToken: 300, AuthorizationCode: 60, IdToken: 300, Interaction: 120,
+      AccessToken: 300, AuthorizationCode: 60, IdToken: 300, Interaction: signup ? oidcInteractionSeconds : 120,
       Grant: 43_200, RefreshToken: 43_200, Session: 43_200,
     },
     pkce: { required: () => true },
@@ -141,7 +155,8 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     expiresWithSession: () => true,
     issueRefreshToken: (_ctx, client) => client.grantTypeAllowed('refresh_token'),
     rotateRefreshToken: true,
-    interactions: { url: (_ctx, interaction) => `/interaction/${interaction.uid}` },
+    interactions: { policy, url: (_ctx, interaction) => `/interaction/${interaction.uid}` },
+    ...(signup ? { discovery: { prompt_values_supported: ['none', 'login', 'consent', 'create'] } } : {}),
     features: {
       devInteractions: { enabled: false },
       backchannelLogout: { enabled: true },
@@ -216,6 +231,10 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     reply.header('referrer-policy', 'no-referrer');
     reply.header('x-content-type-options', 'nosniff');
     reply.header('content-security-policy', "frame-ancestors 'none'; base-uri 'none'");
+    if (canonical && (request.method === 'GET' || request.method === 'HEAD') &&
+      ['/', '/zh', '/zh/', '/register', '/zh/register'].includes(request.url)) {
+      return reply.redirect(canonical.origin + request.url, 308);
+    }
   });
   app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_request, body, done) => {
     done(null, new URLSearchParams(body.toString()));
@@ -228,14 +247,16 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
       return reply.code(503).send({ ready: false });
     }
   });
-  await registerBrowserAuth(app, pool, issuer, backupHash, realm);
+  await registerBrowserAuth(app, pool, issuer, backupHash, realm, !canonical);
   protocolUi = await registerBrowserPage(app, issuer);
   app.get<{ Params: { uid: string } }>('/interaction/:uid', async (request, reply) => store.request(async () => {
     const details = await provider.interactionDetails(request.raw, reply.raw).catch(() => undefined);
-    if (!details || details.uid !== request.params.uid || details.prompt.name !== 'login') {
+    if (!details || details.uid !== request.params.uid || !validInteractionUid(details.uid)) {
       return reply.code(400).send({ error: 'unexpected_interaction' });
     }
-    return sendLogin(reply.header('referrer-policy', 'same-origin'));
+    if (details.prompt.name === 'create') return reply.redirect('/interaction/' + details.uid + '/register', 303);
+    if (details.prompt.name !== 'login') return reply.code(400).send({ error: 'unexpected_interaction' });
+    return sendLogin(reply.header('referrer-policy', 'same-origin'), 200, details.uid);
   }));
   app.post<{ Params: { uid: string }; Body: URLSearchParams }>('/interaction/:uid', async (request, reply) => store.request(async () => {
     // A same-origin form response must preserve Origin for a retry after invalid credentials.
@@ -251,14 +272,14 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     }
     let email: string;
     try { email = normalizeEmail(body.get('email') ?? ''); }
-    catch { return sendLogin(reply, 400); }
+    catch { return sendLogin(reply, 400, details.uid); }
     if (!await loginRateAllowed(pool, request.ip, email)) {
-      return sendLogin(reply.header('retry-after', '60'), 429);
+      return sendLogin(reply.header('retry-after', '60'), 429, details.uid);
     }
     const account = await getLogin(pool, email);
     const authentic = await verifyPassword(body.get('password') ?? '', account?.password_hash ?? backupHash);
     if (!account?.enabled || !authentic || !store.remember(account.id, account.security_epoch) || !await store.isEnabled(account.id)) {
-      return sendLogin(reply, 401);
+      return sendLogin(reply, 401, details.uid);
     }
     reply.hijack();
     try {
@@ -266,7 +287,55 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     } catch {
       if (reply.raw.headersSent) reply.raw.destroy();
       else reply.raw.writeHead(409, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store',
-        'content-security-policy': protocolPageCsp, 'referrer-policy': 'same-origin' }).end(loginPage(true));
+        'content-security-policy': protocolPageCsp, 'referrer-policy': 'same-origin' }).end(loginPage(true, details.uid));
+    }
+  }));
+  type InteractionRequest = FastifyRequest<{ Params: { uid: string } }>;
+  async function registrationInteraction(request: InteractionRequest, reply: FastifyReply) {
+    if (!signup || !protocolUi || !validInteractionUid(request.params.uid)) return undefined;
+    const details = await provider.interactionDetails(request.raw, reply.raw).catch(() => undefined);
+    return details?.uid === request.params.uid && ['login', 'create'].includes(details.prompt.name) ? details : undefined;
+  }
+  const restartRegistration = (reply: FastifyReply) => reply.code(400).type('text/html').send(page(
+    'Authorization request expired', '<p>Return to the app and start sign-in again.</p><a href="/login">Sign in to Identity</a>'));
+  app.get<{ Params: { uid: string } }>('/interaction/:uid/register', async (request, reply) => store.request(async () => {
+    const details = await registrationInteraction(request, reply);
+    if (!details) return restartRegistration(reply);
+    await beginRegistrationIntent(pool, reply, details.uid, realm);
+    return reply.redirect(request.headers['accept-language']?.toLowerCase().startsWith('zh') ? '/zh/register' : '/register', 303);
+  }));
+  app.get<{ Params: { uid: string } }>('/interaction/:uid/registered', async (request, reply) => store.request(async () => {
+    const details = await registrationInteraction(request, reply);
+    const intent = intentDigest(request, realm);
+    if (!details || !intent || !(await pool.query(
+      'SELECT 1 FROM registration_intents WHERE token_digest = $1 AND interaction_uid = $2 AND account_id IS NOT NULL AND expires_at > now()',
+      [intent, details.uid])).rowCount) return restartRegistration(reply);
+    const chinese = request.headers['accept-language']?.toLowerCase().startsWith('zh');
+    return reply.header('referrer-policy', 'same-origin').type('text/html').send(page(
+      chinese ? '继续前往应用' : 'Continue to your application',
+      '<form method="post"><button type="submit">' + (chinese ? '继续' : 'Continue') + '</button></form>',
+      chinese ? 'zh-CN' : 'en'));
+  }));
+  app.post<{ Params: { uid: string } }>('/interaction/:uid/registered', async (request, reply) => store.request(async () => {
+    if (request.headers.origin !== issuer.origin) return reply.code(403).send({ error: 'unexpected_origin' });
+    const details = await registrationInteraction(request, reply);
+    const intent = intentDigest(request, realm);
+    if (!details || !intent) return restartRegistration(reply);
+    const account = (await pool.query<{ id: string; security_epoch: number }>(
+      `DELETE FROM registration_intents r USING accounts a
+        WHERE r.token_digest = $1 AND r.interaction_uid = $2 AND r.expires_at > now() AND r.account_id = a.id
+          AND a.enabled AND a.security_epoch = r.account_epoch AND (a.email_verified_at IS NOT NULL OR $3)
+        RETURNING a.id, a.security_epoch`, [intent, details.uid, testenvSignupAllowed(issuer)])).rows[0];
+    if (!account || !store.remember(account.id, account.security_epoch) || !await store.isEnabled(account.id)) return restartRegistration(reply);
+    reply.hijack();
+    try {
+      await provider.interactionFinished(request.raw, reply.raw, {
+        login: { accountId: account.id }, ...(details.prompt.name === 'create' ? { create: {} } : {}),
+      }, { mergeWithLastSubmission: false });
+    } catch {
+      if (reply.raw.headersSent) reply.raw.destroy();
+      else reply.raw.writeHead(409, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
+        .end(page('Authorization request expired', '<p>Return to the app and start sign-in again.</p>'));
     }
   }));
   const callback = provider.callback();

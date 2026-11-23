@@ -169,8 +169,8 @@ test('provisioned accounts and clients survive restart with real OIDC, revocatio
       writeFile(passwordPath, pass, { mode: 0o600 }),
     ]);
     await test.step('Provision through the operator CLI and reject repeats/invalid registration', async () => {
-      await expect(cli('migrate')).resolves.toEqual({ version: 3, changed: true });
-      await expect(cli('migrate')).resolves.toEqual({ version: 3, changed: false });
+      await expect(cli('migrate')).resolves.toEqual({ version: 4, changed: true });
+      await expect(cli('migrate')).resolves.toEqual({ version: 4, changed: false });
       await cli('keys', 'init');
       await expect(cli('keys', 'init')).rejects.toThrow('already exists');
       accountId = (await cli<{ id: string }>('account', 'create', email)).id;
