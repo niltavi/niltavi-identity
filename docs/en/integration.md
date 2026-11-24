@@ -17,6 +17,8 @@ In a Docker Compose deployment the command is `docker compose -p niltavi-identit
 
 Identity derives three addresses from the home URL's origin, and the SDK serves all three: `/auth/callback`, `/auth/signed-out` and `/auth/notifications`. Identity must be able to reach `/auth/notifications` over HTTPS from its own network.
 
+When Core installs an application, its installer can call the same operator command and capture its JSON output directly. Map `client_id` and `client_secret` to the application's server-side secret store before starting it. Keep the registration output out of installer logs. If the ID already exists, reuse the credential already provisioned for that application or have an operator rotate it if it was lost.
+
 ## 2. Install the SDK
 
 The SDK is not on a package registry yet. Build a tarball from a checkout of this repository and install that:
@@ -176,7 +178,7 @@ Delivery is best effort. The check in the next section covers a notification tha
 
 On the first request after 60 seconds, the SDK asks Identity whether the session is still backed by a live sign-in and reads the account's current teams and roles. A session that is no longer live ends. So a change at Identity reaches every application within one minute even without notifications.
 
-When Identity cannot be reached, an established session keeps working for at most 5 minutes after its last successful check. After that, requests get `503` with the message "The sign-in service is temporarily unavailable" (「登录服务暂时不可用」 for a browser that prefers Chinese), as a page or as `{"error":"identity_unavailable","message":"…"}`. Sessions work again as soon as Identity answers. New sign-ins are not possible during the outage.
+When Identity cannot be reached, an established session keeps working for at most 5 minutes after its last successful check. After that, requests get `503` with the message "The sign-in service is temporarily unavailable" (「登录服务暂时不可用」 for a browser that prefers Chinese), as a page or as `{"error":"identity_unavailable","message":"…"}`. Sessions work again as soon as Identity answers and confirms they are still active. New sign-ins are not possible during the outage. If Identity rejects the application's credentials, that check ends cached browser and Agent access without an outage grace period.
 
 Both values are fixed product behaviour. The `checkIntervalSeconds` and `outageGraceSeconds` options exist for tests only.
 

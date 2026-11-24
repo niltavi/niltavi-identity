@@ -23,7 +23,7 @@
     "build:sdk": "tsc --project sdk/tsconfig.json",
     "build": "npm run build:service && npm run build:sdk && npm run build:web",
     "local": "npm run build && node scripts/local.mjs",
-    "test:prd": "npm run build:service && node acceptance/prd.mjs",
+    "test:prd": "npm run build:service && npm run build:web && node acceptance/prd.mjs",
     "test:sdk": "npm run build:service && npm run build:sdk && node acceptance/sdk.mjs"
   },
   "devDependencies": {
