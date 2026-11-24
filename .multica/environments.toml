@@ -1,0 +1,9 @@
+# Local environments for Multica runs. Each one gets ten free ports starting at $MULTICA_PORT.
+[environments.identity]
+label = "Identity + demo apps"
+# The launcher page on $MULTICA_PORT links to Identity (HTTPS on the next port), the two demo
+# applications, the local mailbox and the one-time setup link.
+start = "npm ci --no-audit --no-fund && npm run build && node scripts/local.mjs"
+stop = "node scripts/local.mjs stop"
+url = "http://localhost:$MULTICA_PORT"
+ttl = "72h"
