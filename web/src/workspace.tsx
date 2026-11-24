@@ -528,6 +528,7 @@ function Security() {
   const task = useTask();
   const [setup, setSetup] = useState<{ secret: string; uri: string }>();
   const [codeError, setCodeError] = useState<string>();
+  const [disableOpen, setDisableOpen] = useState(false);
   if (!account) return null;
   const submitCode = (path: string, done: string, after?: () => void) => (event: Parameters<typeof readForm>[0]) => {
     const code = readForm(event)('code').trim();
@@ -545,13 +546,42 @@ function Security() {
   };
   let body: ReactNode;
   if (account.secondFactorEnabled) {
+    const pending = task.pending === 'code';
     body = <>
-      <div><State color="success">{t('On', '已开启')}</State></div>
-      <Form className="grid max-w-sm gap-3" validationBehavior="native" onSubmit={submitCode('/account/second-factor/disable', t('Two-step verification is off.', '两步验证已关闭。'))}>
-        <CodeField label={t('Code from your authenticator app', '验证器中的验证码')} error={codeError} onInput={() => setCodeError(undefined)}
-          description={t('Enter a current code to turn two-step verification off.', '输入当前验证码以关闭两步验证。')} />
-        <div><Button type="submit" variant="danger-soft" isPending={task.pending === 'code'}>{t('Turn off', '关闭两步验证')}</Button></div>
-      </Form>
+      <div className="flex flex-wrap items-center gap-3">
+        <State color="success">{t('On', '已开启')}</State>
+        <Modal isOpen={disableOpen} onOpenChange={open => {
+          if (pending) return;
+          task.setError(undefined);
+          setCodeError(undefined);
+          setDisableOpen(open);
+        }}>
+          <Button size="sm" variant="secondary">{t('Manage two-step verification', '管理两步验证')}</Button>
+          <Modal.Backdrop isDismissable={!pending} isKeyboardDismissDisabled={pending}>
+            <Modal.Container placement="auto">
+              <Modal.Dialog className="sm:max-w-md">
+                <Modal.Header>
+                  <Modal.Heading>{t('Turn off two-step verification?', '关闭两步验证？')}</Modal.Heading>
+                </Modal.Header>
+                <Form className="contents" validationBehavior="native" onSubmit={submitCode('/account/second-factor/disable',
+                  t('Two-step verification is off.', '两步验证已关闭。'), () => setDisableOpen(false))}>
+                  <Modal.Body className="grid gap-4">
+                    <p className="text-muted">{t('You’ll need to set up two-step verification again before you can change instance settings.',
+                      '关闭后，需重新设置两步验证才能更改实例设置。')}</p>
+                    {task.error && <TaskFeedback task={task} />}
+                    <CodeField label={t('Current code from your authenticator app', '验证器中的当前验证码')} error={codeError}
+                      onInput={() => setCodeError(undefined)} />
+                  </Modal.Body>
+                  <Modal.Footer className="flex-wrap">
+                    <Button type="button" slot="close" variant="tertiary" isDisabled={pending}>{t('Cancel', '取消')}</Button>
+                    <Button type="submit" variant="danger" isPending={pending}>{t('Turn off two-step verification', '关闭两步验证')}</Button>
+                  </Modal.Footer>
+                </Form>
+              </Modal.Dialog>
+            </Modal.Container>
+          </Modal.Backdrop>
+        </Modal>
+      </div>
     </>;
   } else if (setup) {
     body = <>
@@ -580,7 +610,7 @@ function Security() {
   }
   return <Panel title={t('Two-step verification', '两步验证')}
     description={t('A code from an authenticator app, asked for when you change instance settings.', '来自验证器应用的验证码，在更改实例设置时需要输入。')}>
-    <TaskFeedback task={task} />
+    {!disableOpen && <TaskFeedback task={task} />}
     {body}
   </Panel>;
 }
