@@ -4,9 +4,9 @@ Self-hosted accounts and OpenID Connect single sign-on for your applications. Us
 
 [Try the test deployment](https://identity.testenv.niltavi.com/)
 
-## Instance console
+## Screenshots
 
-English screenshots from a running Identity instance with demo accounts and applications.
+English screenshots from a running Identity instance with demo data.
 
 ### Accounts
 
@@ -16,9 +16,9 @@ English screenshots from a running Identity instance with demo accounts and appl
 
 ![OpenID Connect application list with enable, disable, and client secret controls above the registration form](docs/screenshots/admin-applications.png)
 
-### Audit log
+### Teams
 
-![Audit log showing application and account events with their timestamps, actors, and targets](docs/screenshots/admin-audit-log.png)
+![Teams page in the account center showing the Fieldwork Studio team, member roles, and a pending invitation](docs/screenshots/account-teams.png)
 
 <br />
 
