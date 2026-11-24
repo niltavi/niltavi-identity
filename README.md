@@ -4,21 +4,21 @@ Self-hosted accounts and OpenID Connect single sign-on for your applications. Us
 
 [Try the test deployment](https://identity.testenv.niltavi.com/)
 
-## Screenshots
+## Instance console
 
-English desktop views from the test deployment, captured at 1920 × 1080.
+English screenshots from a running Identity instance with demo accounts and applications.
 
-### Home
+### Accounts
 
-![Niltavi Identity homepage with links to install the service and create an account](docs/screenshots/home.png)
+![Account list showing administrator roles, verification and disabled states, and the account management menu](docs/screenshots/admin-accounts.png)
 
-### Sign in
+### Applications
 
-![Sign-in form with email and password fields and a password reset link](docs/screenshots/sign-in.png)
+![OpenID Connect application list with enable, disable, and client secret controls above the registration form](docs/screenshots/admin-applications.png)
 
-### Registration
+### Audit log
 
-![Account registration form with email and password fields](docs/screenshots/registration.png)
+![Audit log showing application and account events with their timestamps, actors, and targets](docs/screenshots/admin-audit-log.png)
 
 <br />
 
