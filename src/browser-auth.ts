@@ -332,16 +332,24 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     if (!viewer) return failure(reply, 401, 'sign_in_required');
     const [kind, id] = fields(request, 'kind', 'id') ?? [];
     if (!id || (kind !== 'account' && kind !== 'applications')) return failure(reply, 400, 'invalid_session');
-    if (kind === 'account') {
-      const removed = await pool.query('DELETE FROM web_sessions WHERE id = $1 AND account_id = $2', [id, viewer.id]);
-      if (!removed.rowCount) return failure(reply, 404, 'session_not_found');
-      if (id === viewer.sessionId) web.clear(reply);
-    } else {
-      const targets = await store.endSession(viewer.id, id);
-      if (!targets) return failure(reply, 404, 'session_not_found');
-      notifier.session(viewer.id, targets);
-    }
-    await audit(pool, 'account.session_revoked', viewer.id, viewer.id, kind);
+    const targets = await transaction(pool, async (db) => {
+      // Serialize with password reset and account-wide revocation, which also touch these rows.
+      const live = await db.query(`SELECT 1 FROM accounts a JOIN web_sessions s ON s.account_id = a.id
+        WHERE a.id = $1 AND a.enabled AND s.account_epoch = a.security_epoch
+          AND s.token_digest = $2 AND s.expires_at > now() FOR UPDATE OF a`, [viewer.id, viewer.key]);
+      if (!live.rowCount) return undefined;
+      const affected = kind === 'applications' ? await store.endSession(db, viewer.id, id) : [];
+      if (!affected) return undefined;
+      if (kind === 'account') {
+        const removed = await db.query('DELETE FROM web_sessions WHERE id = $1 AND account_id = $2', [id, viewer.id]);
+        if (!removed.rowCount) return undefined;
+      }
+      await audit(db, 'account.session_revoked', viewer.id, viewer.id, kind);
+      return affected;
+    });
+    if (!targets) return failure(reply, 404, 'session_not_found');
+    if (kind === 'account' && id === viewer.sessionId) web.clear(reply);
+    notifier.session(viewer.id, targets);
     return reply.code(204).send();
   });
 
@@ -411,7 +419,9 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     if (!fields(request)) return failure(reply, 400, 'unexpected_body');
     if (viewer.emailVerified) return failure(reply, 409, 'already_verified');
     if (!await mailer.general()) return failure(reply, 503, 'delivery_unavailable');
-    if (!await rateAllowed(pool, [[`verify-link:${viewer.id}`, 3, 900]])) return failure(reply, 429, 'try_later');
+    if (!await rateAllowed(pool, [[`verify-link:${viewer.id}`, 3, 900], [`verify-link:source:${request.ip}`, 20]])) {
+      return failure(reply, 429, 'try_later');
+    }
     const token = await issueAccountLink(pool, viewer.id, viewer.email, 'verify');
     const language = mailLanguage(request, viewer.locale);
     const link = issuer.origin + (language === 'zh' ? '/zh' : '') + '/verify-email#' + token;

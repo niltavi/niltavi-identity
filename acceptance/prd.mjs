@@ -14,6 +14,7 @@ import { totpCode } from '../dist/credentials.js';
 import {
   connect, createAccount, getAccount, markEmailVerified, migrate, operatorResetLink, schemaVersion, setAccountEnabled,
 } from '../dist/database.js';
+import { createProtocolStore } from '../dist/protocol-store.js';
 import { activateKey, initializeSecrets, retireKey, stageKey } from '../dist/settings.js';
 import { service } from '../dist/service.js';
 import { issueSetupLink } from '../dist/setup.js';
@@ -432,7 +433,15 @@ try {
   const sessions = (await memberSession.get('/account/sessions')).body.sessions;
   const central = sessions.find((entry) => entry.kind === 'applications' && entry.applications.includes('App One'));
   assert.ok(central && sessions.some((entry) => entry.kind === 'account' && entry.current));
-  assert.equal((await memberSession.post('/account/sessions/revoke', { kind: 'applications', id: central.id })).status, 204);
+  const savedSession = (await pool.query("SELECT payload FROM oidc_records WHERE model = 'Session' AND storage_key = $1",
+    [central.id])).rows[0].payload;
+  const revokeCentral = () => memberSession.post('/account/sessions/revoke', { kind: 'applications', id: central.id });
+  const revocations = await Promise.all([revokeCentral(), revokeCentral()]);
+  assert.deepEqual(revocations.map(({ status }) => status).sort(), [204, 404]);
+  const { Adapter } = createProtocolStore(pool);
+  const sessionAdapter = new Adapter('Session');
+  await assert.rejects(sessionAdapter.upsert(savedSession.jti, savedSession, 60), { error: 'invalid_grant' },
+    'An authorization request that loaded the session before revocation cannot save the old session');
   assert.equal((await check(one, claims.sub, claims.sid)).body.active, false, 'Revoking one central session ends its application sessions');
   const other = flow(one, await signIn(memberEmail, newPassword));
   const otherClaims = decodeJwt((await other.tokens((await other.follow(await other.start())).location)).body.id_token);

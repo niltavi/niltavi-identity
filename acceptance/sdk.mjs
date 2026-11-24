@@ -15,7 +15,8 @@ import { SignJWT, importJWK } from 'jose';
 import selfsigned from 'selfsigned';
 import { Agent } from 'undici';
 import {
-  connect, createAccount, migrate, registerApplication, schemaVersion, setAccountEnabled, setInstanceRole, standardApplication,
+  connect, createAccount, migrate, registerApplication, schemaVersion, setAccountEnabled, setApplicationEnabled, setInstanceRole,
+  standardApplication,
 } from '../dist/database.js';
 import { service } from '../dist/service.js';
 import { initializeSecrets, loadKeyRing, loadSecretEncryptionKey } from '../dist/settings.js';
@@ -471,6 +472,17 @@ try {
   await within(notified, 'all devices by notification', status(mabel, `${a.origin}/api/me`, 401));
   await within(polled, 'all devices without notifications', status(mabel, `${b.origin}/api/me`, 401));
   step('signing out of all devices ends every application session');
+
+  await signInEverywhere();
+  assert.equal((await anyone.api(`${b.origin}/api/me`, bearer(outage.token))).status, 200);
+  await setApplicationEnabled(pool, b.id, false);
+  // Wait out the normal freshness interval while remaining inside the outage grace period.
+  await sleep(check * 1_000 + 100);
+  assert.equal((await mabel.api(`${b.origin}/api/me`)).status, 401);
+  assert.equal((await anyone.api(`${b.origin}/api/me`, bearer(outage.token))).status, 401);
+  assert.equal((await mabel.api(`${a.origin}/api/me`)).status, 200);
+  await setApplicationEnabled(pool, b.id, true);
+  step('a disabled application loses cached browser and Agent access at the next check');
 
   // A disabled account loses its application sessions within one check interval, with no notification at all.
   await signInEverywhere();

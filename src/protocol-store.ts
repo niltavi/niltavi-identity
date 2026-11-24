@@ -43,11 +43,13 @@ export function createProtocolStore(pool: Pool, realm?: string, clients?: Client
 
   class PostgresAdapter implements Adapter {
     private readonly model: string;
+    private readonly preventRevival: boolean;
     private readonly replayDetection: boolean;
     private readonly registry: boolean;
 
     constructor(model: string) {
       this.model = `${prefix}${model}`;
+      this.preventRevival = model === 'Grant' || model === 'Session';
       this.replayDetection = model === 'ReplayDetection';
       // Registered applications live in their own table, so a new registration works without a restart.
       this.registry = model === 'Client';
@@ -77,7 +79,7 @@ export function createProtocolStore(pool: Pool, realm?: string, clients?: Client
          WHERE (NOT $7::boolean OR oidc_records.expires_at <= clock_timestamp())
            AND (NOT $8::boolean OR oidc_records.consumed_at IS NULL)`,
         [this.model, storageKey(id), JSON.stringify(payload), expiresIn ?? null, accountId, epoch,
-          this.replayDetection, this.model === grantModel],
+          this.replayDetection, this.preventRevival],
       );
       if (result.rowCount !== 1) {
         throw new errors.InvalidGrant('The grant is no longer available');
@@ -101,8 +103,8 @@ export function createProtocolStore(pool: Pool, realm?: string, clients?: Client
       const result = await pool.query<{
         payload: AdapterPayload; account_id: string | null; account_epoch: number | null;
       }>(`${readable} AND ${column} = $2
-          AND (r.model <> $3 OR r.consumed_at IS NULL)
-          AND NOT ${revokedGrant("r.payload ->> 'grantId'")}`, [this.model, value, grantModel]);
+          AND (NOT $3::boolean OR r.consumed_at IS NULL)
+          AND NOT ${revokedGrant("r.payload ->> 'grantId'")}`, [this.model, value, this.preventRevival]);
       const row = result.rows[0];
       if (row?.account_id && row.account_epoch !== null && !remember(row.account_id, row.account_epoch)) {
         return undefined;
@@ -123,6 +125,11 @@ export function createProtocolStore(pool: Pool, realm?: string, clients?: Client
     }
 
     async destroy(id: string) {
+      if (this.model === sessionModel) {
+        await pool.query(`UPDATE oidc_records SET consumed_at = clock_timestamp()
+          WHERE model = $1 AND storage_key = $2 AND consumed_at IS NULL`, [this.model, storageKey(id)]);
+        return;
+      }
       await pool.query('DELETE FROM oidc_records WHERE model = $1 AND storage_key = $2 AND (model <> $3 OR consumed_at IS NULL)', [
         this.model, storageKey(id), grantModel,
       ]);
@@ -157,7 +164,8 @@ export function createProtocolStore(pool: Pool, realm?: string, clients?: Client
          WHERE app.value ->> 'sid' IS NOT NULL AND NOT ${revokedGrant("app.value ->> 'grantId'")}
        ) AS apps
        FROM oidc_records r JOIN accounts a ON a.id = r.account_id
-       WHERE r.model = $1 AND r.account_id = $2 AND ${live} ORDER BY r.payload ->> 'loginTs' DESC`, [sessionModel, account]);
+       WHERE r.model = $1 AND r.account_id = $2 AND r.consumed_at IS NULL AND ${live}
+       ORDER BY r.payload ->> 'loginTs' DESC`, [sessionModel, account]);
     return result.rows.map(({ storage_key: key, payload, expires_at: expiresAt, apps }) => ({
       key, expiresAt, apps,
       signedInAt: typeof payload.loginTs === 'number' ? new Date(payload.loginTs * 1_000) : null,
@@ -167,7 +175,8 @@ export function createProtocolStore(pool: Pool, realm?: string, clients?: Client
   async function sessionActive(account: string, client: string, sid: string) {
     return Boolean((await pool.query(
       `SELECT 1 FROM oidc_records r JOIN accounts a ON a.id = r.account_id
-       WHERE r.model = $1 AND r.account_id = $2 AND ${live} AND r.payload -> 'authorizations' -> $3 ->> 'sid' = $4
+       WHERE r.model = $1 AND r.account_id = $2 AND r.consumed_at IS NULL AND ${live}
+         AND r.payload -> 'authorizations' -> $3 ->> 'sid' = $4
          AND NOT ${revokedGrant("r.payload -> 'authorizations' -> $3 ->> 'grantId'")}`,
       [sessionModel, account, client, sid])).rowCount);
   }
@@ -195,24 +204,26 @@ export function createProtocolStore(pool: Pool, realm?: string, clients?: Client
     return (await db.query<{ id: string; sid: string }>(
       `SELECT DISTINCT $3::text AS id, r.payload -> 'authorizations' -> $3 ->> 'sid' AS sid
        FROM oidc_records r JOIN accounts a ON a.id = r.account_id
-       WHERE r.model = $1 AND r.account_id = $2 AND ${live}
+       WHERE r.model = $1 AND r.account_id = $2 AND r.consumed_at IS NULL AND ${live}
          AND r.payload -> 'authorizations' -> $3 ->> 'grantId' = ANY($4::text[])
          AND r.payload -> 'authorizations' -> $3 ->> 'sid' IS NOT NULL`,
       [sessionModel, account, client, grants.rows.map(({ id }) => id)])).rows;
   }
 
-  // Ends one central session and everything issued under it. Returns the applications to notify.
-  async function endSession(account: string, key: string) {
-    const removed = (await pool.query<{ payload: AdapterPayload }>(
-      'DELETE FROM oidc_records WHERE model = $1 AND account_id = $2 AND storage_key = $3 RETURNING payload',
+  // Keep the session and grant revocations until expiration so an in-flight write cannot revive them.
+  // The caller commits both changes together before notifying applications.
+  async function endSession(db: Queryable, account: string, key: string) {
+    const removed = (await db.query<{ payload: AdapterPayload }>(
+      `UPDATE oidc_records SET consumed_at = clock_timestamp()
+       WHERE model = $1 AND account_id = $2 AND storage_key = $3 AND consumed_at IS NULL RETURNING payload`,
       [sessionModel, account, key])).rows[0];
     if (!removed) return undefined;
     const entries = Object.entries((removed.payload.authorizations ?? {}) as Record<string, { sid?: string; grantId?: string }>);
     const grants = entries.flatMap(([, entry]) => entry.grantId ? [entry.grantId] : []);
     if (grants.length) {
-      await pool.query(`DELETE FROM oidc_records WHERE account_id = $1 AND starts_with(model, $3)
-        AND (model <> $4 OR consumed_at IS NULL)
-        AND (payload ->> 'grantId' = ANY($2::text[]) OR payload ->> 'jti' = ANY($2::text[]))`, [account, grants, prefix, grantModel]);
+      await db.query(`UPDATE oidc_records SET consumed_at = clock_timestamp()
+        WHERE account_id = $1 AND model = $3 AND consumed_at IS NULL AND payload ->> 'jti' = ANY($2::text[])`,
+      [account, grants, grantModel]);
     }
     return entries.flatMap(([id, entry]) => entry.sid ? [{ id, sid: entry.sid }] : []);
   }

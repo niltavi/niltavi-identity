@@ -243,11 +243,13 @@ export async function createIdentity(options: IdentityOptions = {}): Promise<Ide
 
   // After a failed call, Identity is left alone for a moment so an outage does not turn every request into a slow one.
   let quietUntil = 0;
-  async function ask(path: string, body: Record<string, string>) {
+  async function ask(path: string, body: Record<string, string>): Promise<Record<string, unknown> | undefined> {
     if (Date.now() < quietUntil) return undefined;
     try {
       const answer = await request(issuer + path, body);
       if (answer.status === 200 && typeof answer.data.active === 'boolean') return answer.data;
+      // Identity is reachable and has refused this application. Cached access cannot continue.
+      if (answer.status === 401 && answer.data.error === 'invalid_client') return { active: false };
       log(`Identity answered ${answer.status} to ${path}.`);
     } catch { log(`Identity could not be reached for ${path}.`); }
     quietUntil = Date.now() + Math.min(5_000, checkMs / 2);
