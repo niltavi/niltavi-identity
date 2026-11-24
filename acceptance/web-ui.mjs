@@ -196,8 +196,13 @@ await journey('two-step verification: QR code, manual key, enable', async () => 
 await journey('console write: register an application, credentials shown once', async () => {
   await owner.getByRole('link', { name: 'Overview' }).waitFor();
   await owner.goto(origin + '/workspace');
-  await owner.getByRole('link', { name: 'Instance console' }).click();
+  await expect(owner.getByRole('navigation', { name: 'Account navigation' }).getByRole('link', { name: 'Instance console' })).toHaveCount(0);
+  await owner.getByRole('button', { name: 'Account menu' }).press('Enter');
+  const consoleLink = owner.getByRole('menuitem', { name: 'Instance console' });
+  await expect(consoleLink).toHaveAttribute('href', '/admin');
+  await consoleLink.press('Enter');
   await owner.waitForURL(origin + '/admin');
+  assert.equal(await owner.evaluate(() => performance.getEntriesByType('navigation')[0].name), origin + '/workspace');
   await owner.getByRole('heading', { level: 1, name: 'Instance console' }).waitFor();
   await owner.getByText('You are the owner').waitFor();
   assert.equal(await owner.getByText('Outgoing mail is not configured').count(), 0);
@@ -206,6 +211,7 @@ await journey('console write: register an application, credentials shown once', 
   const sidebar = await navigation.boundingBox();
   const content = await owner.getByRole('main').boundingBox();
   assert.ok(sidebar && content && sidebar.x + sidebar.width <= content.x);
+  await expect(navigation.getByRole('link', { name: 'Account center' })).toHaveCount(0);
   await navigation.getByRole('link', { name: 'Applications' }).click();
   await owner.waitForURL(origin + '/admin/applications');
   await expect(navigation.getByRole('link', { name: 'Applications' })).toHaveAttribute('aria-current', 'page');
@@ -265,7 +271,8 @@ await journey('console navigation opens from the left and works by keyboard on m
   await noOverflow(page, 'console navigation at 768px');
   await page.setViewportSize({ width: 320, height: 800 });
   await englishTrigger.press('Enter');
-  await page.getByRole('dialog', { name: 'Instance console' }).getByRole('link', { name: 'Account center' }).press('Enter');
+  await page.getByRole('dialog', { name: 'Instance console' }).getByRole('button', { name: 'Account menu' }).press('Enter');
+  await page.getByRole('menuitem', { name: 'Account center' }).press('Enter');
   await page.waitForURL(origin + '/workspace');
   await page.context().close();
 });
@@ -330,7 +337,16 @@ await journey('register with mail: password errors only after validation, 6-digi
   await adaPage.waitForURL(origin + '/workspace');
   await adaPage.getByRole('heading', { level: 1, name: 'Account center' }).waitFor();
   await adaPage.getByText('Verified', { exact: true }).waitFor();
-  assert.equal(await adaPage.getByRole('link', { name: 'Instance console' }).count(), 0);
+  await adaPage.getByRole('button', { name: 'Account menu' }).press('Enter');
+  const menu = adaPage.getByRole('menu', { name: 'Account menu' });
+  await expect(menu.getByRole('menuitem', { name: 'Sign out' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: 'Instance console' })).toHaveCount(0);
+  await adaPage.goto(origin + '/admin/accounts');
+  await adaPage.getByText('Only instance administrators can open the console.').waitFor();
+  await expect(adaPage.getByRole('navigation', { name: 'Instance console navigation' })).toHaveCount(0);
+  assert.equal((await adaPage.request.get(origin + '/admin/api/accounts')).status(), 403);
+  await adaPage.getByRole('link', { name: 'Back to your account' }).click();
+  await adaPage.waitForURL(origin + '/workspace');
 });
 
 await journey('profile: display name is saved', async () => {
@@ -811,6 +827,65 @@ await journey('no horizontal overflow at 320px and desktop, light and dark, both
       }
       await guest.context().close();
       await member.context().close();
+    }
+  }
+});
+
+await journey('shared account menus work across widths, themes, and languages', async () => {
+  await owner.goto(origin + '/admin/accounts');
+  const ada = owner.locator(`[data-account="${people.ada.email}"]`);
+  await owner.getByLabel('Search by email or name').fill(people.ada.email);
+  await owner.getByRole('button', { name: 'Search' }).click();
+  await ada.getByRole('button', { name: `Manage ${people.ada.email}` }).click();
+  await owner.getByRole('menuitem', { name: 'Make administrator' }).click();
+  await ada.getByText('Administrator', { exact: true }).waitFor();
+
+  for (const colorScheme of ['light', 'dark']) {
+    for (const width of [320, 1280]) {
+      const page = await session({ viewport: { width, height: 800 }, colorScheme });
+      await signIn(page, people.ada);
+      for (const zh of [false, true]) {
+        const prefix = zh ? '/zh' : '';
+        const label = zh ? '账号菜单' : 'Account menu';
+        const signOut = zh ? '退出登录' : 'Sign out';
+        const accountNavigation = zh ? '打开账号中心导航' : 'Open account navigation';
+        const consoleNavigation = zh ? '打开实例管理台导航' : 'Open instance console navigation';
+        await page.goto(origin + prefix + '/workspace');
+        for (const [section, nav, target, action] of [
+          ['workspace', accountNavigation, 'admin', zh ? '实例管理台' : 'Instance console'],
+          ['admin', consoleNavigation, 'workspace', zh ? '账号中心' : 'Account center'],
+        ]) {
+          if (width === 320) await page.getByRole('button', { name: nav }).press('Enter');
+          const trigger = page.getByRole('button', { name: label });
+          await expect(trigger).toContainText('Ada L.');
+          await expect(trigger).toContainText(people.ada.email);
+          await trigger.press('Enter');
+          const menu = page.getByRole('menu', { name: label });
+          const link = menu.getByRole('menuitem', { name: action });
+          await expect(link).toBeInViewport();
+          await expect(link).toHaveAttribute('href', prefix + '/' + target);
+          await expect(menu.getByRole('menuitem', { name: signOut })).toBeInViewport();
+          await noOverflow(page, `${prefix}/${section} menu at ${width}px, ${colorScheme}`);
+          await page.screenshot({ path: join(shots, `Z-261-${section}-${zh ? 'zh' : 'en'}-${width}-${colorScheme}.png`), animations: 'disabled' });
+          await page.keyboard.press('Escape');
+          await expect(menu).toBeHidden();
+          await expect(trigger).toBeFocused();
+          await trigger.press('ArrowDown');
+          await expect(link).toBeFocused();
+          await page.keyboard.press('Enter');
+          await page.waitForURL(origin + prefix + '/' + target);
+        }
+        assert.equal(await page.evaluate(() => performance.getEntriesByType('navigation')[0].name), origin + prefix + '/workspace');
+        assert.equal(await page.locator('html').getAttribute('data-theme'), colorScheme);
+      }
+      await page.goto(origin + '/zh/admin');
+      if (width === 320) await page.getByRole('button', { name: '打开实例管理台导航' }).press('Enter');
+      await page.getByRole('button', { name: '账号菜单' }).press('Enter');
+      await page.getByRole('menuitem', { name: '退出登录' }).press('Enter');
+      await page.waitForURL(origin + '/zh/login');
+      await page.goto(origin + '/zh/admin');
+      await page.waitForURL(origin + '/zh/login');
+      await page.context().close();
     }
   }
 });

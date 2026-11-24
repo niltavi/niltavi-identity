@@ -1,25 +1,27 @@
-import { Button, Drawer, Link, RouterProvider } from '@heroui/react';
+import { Button, Drawer, Dropdown, Label, RouterProvider } from '@heroui/react';
+import ArrowLeft from '@gravity-ui/icons/ArrowLeft';
 import Bars from '@gravity-ui/icons/Bars';
+import ShieldCheck from '@gravity-ui/icons/ShieldCheck';
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { ComponentType, ReactNode, SVGProps } from 'react';
+import { AppSidebar, UserMenu } from '../vendor/niltavi-ui/templates/saas/Navigation';
+import { call } from './api';
+import type { Account } from './api';
 import { container, pathFor, routeFor } from './site';
-import type { Route } from './site';
-import { useApp } from './ui';
+import { TaskFeedback, useApp, useTask } from './ui';
 
-type SidebarLink = { label: string; icon: ComponentType<SVGProps<SVGSVGElement>> };
-
-export function SidebarLayout({ title, navigation, openNavigation, section, pages, activeTab, secondary, footer, children }: {
+export function SidebarLayout({ title, navigation, openNavigation, section, pages, activeTab, account, children }: {
   title: string;
   navigation: string;
   openNavigation: string;
   section: 'workspace' | 'admin';
-  pages: (SidebarLink & { id: string | undefined })[];
+  pages: { id: string | undefined; label: string; icon: ComponentType<SVGProps<SVGSVGElement>> }[];
   activeTab: string | undefined;
-  secondary?: (SidebarLink & { to: Omit<Route, 'language'> }) | undefined;
-  footer?: (closeNavigation: () => void) => ReactNode;
+  account: Account;
   children: ReactNode;
 }) {
-  const { language, navigate, t } = useApp();
+  const { language, navigate, refresh, t } = useApp();
+  const signOut = useTask();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const isAdmin = section === 'admin';
   const contentRef = useRef<HTMLElement>(null);
@@ -27,33 +29,35 @@ export function SidebarLayout({ title, navigation, openNavigation, section, page
     if (contentRef.current) contentRef.current.scrollTop = 0;
   }, [activeTab]);
 
-  const closeNavigation = () => setDrawerOpen(false);
   function followSidebarLink(href: string) {
     const { pathname, search } = new URL(href, window.location.href);
-    closeNavigation();
+    setDrawerOpen(false);
     navigate(routeFor(pathname, search));
   }
-  const sidebar = <>
-    <nav aria-label={navigation} className="min-h-0 grow overflow-y-auto">
-      <ul className="grid gap-1">
-        {pages.map(({ id, label, icon: Icon }) => <li key={id ?? 'overview'}>
-          <Link href={pathFor({ language, section, tab: id })} className="sidebar-link"
-            {...(id === activeTab ? { 'aria-current': 'page' } : {})}>
-            <Icon width={16} height={16} aria-hidden="true" />{label}
-          </Link>
-        </li>)}
-        {secondary && <li className="mt-2 border-t border-separator pt-2">
-          <Link href={pathFor({ language, ...secondary.to })} className="sidebar-link">
-            <secondary.icon width={16} height={16} aria-hidden="true" />{secondary.label}
-          </Link>
-        </li>}
-      </ul>
-    </nav>
-    {footer && <div className="border-t border-separator pt-2">{footer(closeNavigation)}</div>}
-  </>;
+
+  const destination = isAdmin
+    ? { section: 'workspace' as const, label: t('Account center', '账号中心'), icon: ArrowLeft }
+    : account.instanceRole && { section: 'admin' as const, label: t('Instance console', '实例管理台'), icon: ShieldCheck };
+  const sidebar = <AppSidebar label={navigation} activeHref={pathFor({ language, section, tab: activeTab })}
+    items={pages.map(({ id, label, icon }) => ({ href: pathFor({ language, section, tab: id }), label, icon }))}
+    footer={<UserMenu name={account.name} email={account.email} label={t('Account menu', '账号菜单')}
+      signOutLabel={t('Sign out', '退出登录')} isPending={Boolean(signOut.pending)} onSignOut={() => {
+        setDrawerOpen(false);
+        void signOut.run('logout', async () => {
+          await call('/account/logout', {});
+          await refresh();
+        });
+      }}>
+      {destination && <Dropdown.Item id={destination.section} href={pathFor({ language, section: destination.section })}
+        textValue={destination.label}>
+        <destination.icon width={14} height={14} aria-hidden="true" />
+        <Label>{destination.label}</Label>
+      </Dropdown.Item>}
+    </UserMenu>} />;
   const contentClass = `${container} grid min-w-0 content-start gap-5 py-8 md:py-12`;
+  const content = <><TaskFeedback task={signOut} />{children}</>;
   return <div className={`grid flex-1 grid-cols-[auto_minmax(0,1fr)] ${isAdmin ? 'min-h-0 grid-rows-[minmax(0,1fr)]' : ''}`}>
-    <RouterProvider navigate={followSidebarLink}><aside className={isAdmin ? 'sidebar-rail sidebar-rail--viewport' : 'sidebar-rail'}>
+    <RouterProvider navigate={followSidebarLink}><div className={isAdmin ? 'sidebar-frame sidebar-frame--viewport' : 'sidebar-frame'}>
       <Drawer isOpen={drawerOpen} onOpenChange={setDrawerOpen}>
         <Button size="sm" variant="ghost" isIconOnly className="md:hidden" aria-label={openNavigation}>
           <Bars width={18} height={18} aria-hidden="true" />
@@ -65,15 +69,15 @@ export function SidebarLayout({ title, navigation, openNavigation, section, page
                 <Drawer.Heading>{title}</Drawer.Heading>
                 <Drawer.CloseTrigger aria-label={t('Close navigation', '关闭导航')} />
               </Drawer.Header>
-              <Drawer.Body className="flex min-h-0 flex-1 flex-col gap-3">{sidebar}</Drawer.Body>
+              <Drawer.Body className="sidebar-drawer-body flex min-h-0 flex-1 flex-col p-0">{sidebar}</Drawer.Body>
             </Drawer.Dialog>
           </Drawer.Content>
         </Drawer.Backdrop>
       </Drawer>
-      <div className="hidden min-h-0 flex-1 flex-col gap-3 md:flex">{sidebar}</div>
-    </aside></RouterProvider>
+      <div className="hidden min-h-0 flex-1 md:block">{sidebar}</div>
+    </div></RouterProvider>
     {isAdmin ? <main ref={contentRef} tabIndex={0} className="admin-content min-h-0 min-w-0">
-      <div className={contentClass}>{children}</div>
-    </main> : <main className={contentClass}>{children}</main>}
+      <div className={contentClass}>{content}</div>
+    </main> : <main className={contentClass}>{content}</main>}
   </div>;
 }

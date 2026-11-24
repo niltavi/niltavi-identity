@@ -1,0 +1,77 @@
+@layer components {
+  .nt-side {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: 240px;
+    min-width: 0;
+    height: 100%;
+    padding: 12px 10px;
+    border-inline-end: 1px solid var(--separator);
+    background: var(--surface-secondary);
+    font-size: .8125rem;
+    overflow: hidden;
+  }
+
+  .nt-side__nav {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .nt-side__group ul {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .nt-side__item {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 7px 10px;
+    border: 0;
+    border-radius: var(--radius-lg);
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    text-align: start;
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: var(--cursor-interactive);
+  }
+
+  .nt-side__item:hover { background: var(--default); color: var(--foreground); }
+  .nt-side__item[aria-current] { background: var(--accent-soft); color: var(--accent-soft-foreground); font-weight: 500; }
+  .nt-side__item:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .nt-side__item > svg:first-child { flex-shrink: 0; }
+  .nt-side__label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+
+  .nt-side__footer {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding-top: 10px;
+    border-top: 1px solid var(--separator);
+  }
+
+  .nt-side__footer > .nt-user { flex: 1; min-width: 0; }
+  .nt-user { justify-content: flex-start; gap: 10px; height: auto; min-height: 40px; padding: 6px; text-align: start; }
+  .nt-user .avatar, .nt-user__card .avatar { flex-shrink: 0; }
+  .nt-ws__text { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+  .nt-ws__text strong { overflow: hidden; font-size: .8125rem; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+  .nt-ws__text span { overflow: hidden; color: var(--muted); font-size: .6875rem; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+  .nt-user__popover { width: min(15rem, calc(100vw - var(--spacing) * 8)); }
+  .nt-user__card { display: flex; align-items: center; gap: 10px; padding: 10px 12px 8px; }
+  .nt-user__card > div { display: flex; flex-direction: column; min-width: 0; font-size: .8125rem; overflow-wrap: anywhere; }
+  .nt-user__card > div > span { color: var(--muted); font-size: .75rem; }
+}
