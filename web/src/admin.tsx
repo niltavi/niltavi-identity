@@ -1,5 +1,4 @@
 import { Button, Dropdown, Form, Input, Label, Table, TextField } from '@heroui/react';
-import ArrowLeft from '@gravity-ui/icons/ArrowLeft';
 import Envelope from '@gravity-ui/icons/Envelope';
 import House from '@gravity-ui/icons/House';
 import LayoutCellsLarge from '@gravity-ui/icons/LayoutCellsLarge';
@@ -74,8 +73,7 @@ export function Admin({ route }: { route: Route }) {
     </Notice>)}
   </div>;
   return <SidebarLayout title={title} navigation={t('Instance console navigation', '实例管理台导航')}
-    openNavigation={t('Open instance console navigation', '打开实例管理台导航')} section="admin" pages={pages} activeTab={tab}
-    secondary={{ to: { section: 'workspace' }, icon: ArrowLeft, label: t('Account center', '账号中心') }}>
+    openNavigation={t('Open instance console navigation', '打开实例管理台导航')} section="admin" pages={pages} activeTab={tab} account={account}>
     <h1 className="text-balance text-3xl font-semibold tracking-tight">{title}</h1>
     {banner}
     <Loaded source={overview}>{() => console ? (!tab ? <Summary console={console} /> : tab === 'accounts' ? <Accounts console={console} />

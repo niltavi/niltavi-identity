@@ -1,5 +1,4 @@
-import { Avatar, Button, Card, Dropdown, FieldError, Form, Input, Label, Link, Modal, TextField } from '@heroui/react';
-import ArrowRightFromSquare from '@gravity-ui/icons/ArrowRightFromSquare';
+import { Button, Card, FieldError, Form, Input, Label, Link, Modal, TextField } from '@heroui/react';
 import ChevronRight from '@gravity-ui/icons/ChevronRight';
 import Clock from '@gravity-ui/icons/Clock';
 import Gear from '@gravity-ui/icons/Gear';
@@ -22,8 +21,7 @@ import {
 } from './ui';
 
 export function Workspace({ route }: { route: Route }) {
-  const { t, account, refresh } = useApp();
-  const signOut = useTask();
+  const { t, account } = useApp();
   if (!account) return null;
   const pages = [
     { id: undefined, label: t('Overview', '概览'), icon: House, content: <Overview /> },
@@ -37,49 +35,15 @@ export function Workspace({ route }: { route: Route }) {
   const active = pages.find(({ id }) => id === route.tab) ?? pages[0]!;
   const title = t('Account center', '账号中心');
   return <SidebarLayout title={title} navigation={t('Account navigation', '账号中心导航')}
-    openNavigation={t('Open account navigation', '打开账号中心导航')} section="workspace" pages={pages} activeTab={active.id}
-    secondary={account.instanceRole ? { to: { section: 'admin' }, icon: ShieldCheck, label: t('Instance console', '实例管理台') } : undefined}
-    footer={closeNavigation => <AccountMenu account={account} busy={Boolean(signOut.pending)} onSignOut={() => {
-      closeNavigation();
-      void signOut.run('logout', async () => {
-        await call('/account/logout', {});
-        await refresh();
-      });
-    }} />}>
+    openNavigation={t('Open account navigation', '打开账号中心导航')} section="workspace" pages={pages} activeTab={active.id} account={account}>
     {route.accountManagement && <PageLink to={{ section: 'workspace', tab: 'settings' }} className="justify-self-start">
       {t('Back to settings', '返回设置')}
     </PageLink>}
     <h1 className="text-balance text-3xl font-semibold tracking-tight">
       {route.accountManagement ? t('Account management', '账号管理') : active.id ? active.label : title}
     </h1>
-    <TaskFeedback task={signOut} />
     {active.content}
   </SidebarLayout>;
-}
-
-function AccountMenu({ account, onSignOut, busy }: { account: Account; onSignOut: () => void; busy: boolean }) {
-  const { t } = useApp();
-  const initials = account.name
-    ? account.name.split(/\s+/).slice(0, 2).map(part => Array.from(part)[0]).join('')
-    : account.email.slice(0, 2);
-  const label = t('Account menu', '账号菜单');
-  return <Dropdown>
-    <Button variant="ghost" className="h-auto min-h-11 w-full min-w-0 justify-start px-2 text-left" aria-label={label} isPending={busy}>
-      <Avatar size="sm" color="accent" className="shrink-0"><Avatar.Fallback>{initials.toUpperCase()}</Avatar.Fallback></Avatar>
-      <span className="grid min-w-0 flex-1">
-        {account.name && <span className="truncate font-medium">{account.name}</span>}
-        <span className="truncate text-xs text-muted" title={account.email}>{account.email}</span>
-      </span>
-    </Button>
-    <Dropdown.Popover placement="top start">
-      <Dropdown.Menu aria-label={label} onAction={onSignOut}>
-        <Dropdown.Item id="sign-out" textValue={t('Sign out', '退出登录')}>
-          <ArrowRightFromSquare width={16} height={16} aria-hidden="true" />
-          <Label>{t('Sign out', '退出登录')}</Label>
-        </Dropdown.Item>
-      </Dropdown.Menu>
-    </Dropdown.Popover>
-  </Dropdown>;
 }
 
 function Overview() {

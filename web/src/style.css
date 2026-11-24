@@ -1,4 +1,6 @@
 @import "../vendor/niltavi-ui/theme/index.css";
+@import "../vendor/niltavi-ui/theme/motion.css";
+@import "../vendor/niltavi-ui/templates/saas/navigation.css";
 @source "./main.tsx";
 @source "./site.tsx";
 @source "./ui.tsx";
@@ -38,7 +40,7 @@
     outline-offset: -2px;
   }
 
-  .sidebar-rail {
+  .sidebar-frame {
     position: sticky;
     inset-block-start: 0;
     display: flex;
@@ -51,7 +53,7 @@
     background: var(--surface-secondary);
   }
 
-  .sidebar-rail--viewport {
+  .sidebar-frame--viewport {
     position: static;
     align-self: stretch;
     height: auto;
@@ -59,27 +61,17 @@
   }
 
   @media (min-width: 768px) {
-    .sidebar-rail {
-      width: calc(var(--spacing) * 60);
-      padding: calc(var(--spacing) * 4) calc(var(--spacing) * 3);
+    .sidebar-frame {
+      width: auto;
+      padding: 0;
+      border: 0;
     }
   }
 
-  .sidebar-link {
-    display: flex;
+  .sidebar-drawer-body > .nt-side {
     width: 100%;
-    min-height: calc(var(--spacing) * 10);
-    align-items: center;
-    gap: calc(var(--spacing) * 3);
-    padding-inline: calc(var(--spacing) * 3);
-    border-radius: var(--radius-lg);
-    color: var(--muted);
-    font-size: var(--text-sm);
-    text-decoration: none;
+    min-height: 0;
+    flex: 1;
+    border: 0;
   }
-
-  .sidebar-link:hover { background: var(--default); color: var(--foreground); }
-  .sidebar-link[aria-current] { background: var(--accent-soft); color: var(--accent-soft-foreground); font-weight: 500; }
-  .sidebar-link:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-  .sidebar-link svg { flex-shrink: 0; }
 }
