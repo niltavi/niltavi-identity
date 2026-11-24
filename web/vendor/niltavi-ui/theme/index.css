@@ -1,0 +1,7 @@
+@import "tailwindcss";
+@import "@heroui/styles";
+@import "./palette.css";
+@import "./niltava.css";
+@import "./fonts/dm-sans.css";
+@import "./components.css";
+@import "./product.css";
