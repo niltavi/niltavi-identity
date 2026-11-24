@@ -15,7 +15,7 @@ export function AppSidebar({ items, activeHref, footer, label }: {
       <div className="nt-side__group">
         <ul>
           {items.map(({ href, label, icon: Icon }) => <li key={href}>
-            <Link href={href} className="nt-side__item nt-press" {...(href === activeHref ? { 'aria-current': 'page' } : {})}>
+            <Link href={href} className="nt-side__item nt-press no-underline" {...(href === activeHref ? { 'aria-current': 'page' } : {})}>
               <Icon aria-hidden="true" width={16} height={16} />
               <span className="nt-side__label">{label}</span>
             </Link>
