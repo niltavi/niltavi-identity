@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:18.7
+    environment:
+      POSTGRES_USER: identity_lab
+      POSTGRES_PASSWORD: identity_lab
+      POSTGRES_DB: identity_lab
+    ports:
+      - "127.0.0.1:55450:5432"
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U identity_lab -d identity_lab"]
+      interval: 2s
+      timeout: 3s
+      retries: 20

@@ -1,0 +1,31 @@
+{
+  "name": "@niltavi/identity-sdk",
+  "version": "0.1.0",
+  "description": "Sign-in, sessions, teams and service tokens for Node applications that use Niltavi Identity.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "niltavi-identity-selftest": "./selftest.mjs"
+  },
+  "files": [
+    "dist",
+    "selftest.mjs",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "jose": "^6.2.18"
+  }
+}
