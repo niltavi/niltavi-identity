@@ -1,7 +1,7 @@
 import { createReadStream } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 
 const contentTypes: Readonly<Record<string, string>> = {
   '.js': 'text/javascript; charset=utf-8',
@@ -12,7 +12,13 @@ const contentTypes: Readonly<Record<string, string>> = {
 };
 
 export const protocolPageCsp = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'";
-type ProtocolView = 'login' | 'logout' | 'signed-out';
+export type ProtocolView = 'login' | 'logout' | 'signed-out' | 'expired';
+export type ProtocolOptions = {
+  invalid?: boolean; throttled?: boolean; form?: string; registration?: string | undefined; recover?: string | undefined;
+  language?: 'en' | 'zh-CN'; appName?: string | undefined; appUrl?: string | undefined;
+};
+export const pageSections = ['home', 'login', 'register', 'workspace', 'recover', 'reset', 'verify-email', 'invite', 'setup', 'admin'] as const;
+const attribute = (value: string) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
 export async function registerBrowserPage(app: FastifyInstance, issuer: URL) {
   const root = new URL('../web/dist/', import.meta.url);
@@ -25,12 +31,16 @@ export async function registerBrowserPage(app: FastifyInstance, issuer: URL) {
   const mount = '<div id="root"></div>';
   if (!page.includes(mount)) throw new Error('The browser bundle is missing its application root.');
   for (const [base, language] of [['', 'en'], ['/zh', 'zh-CN']] as const) {
-    for (const section of ['home', 'login', 'register', 'workspace']) {
+    for (const section of pageSections) {
       const path = base + (section === 'home' ? '/' : '/' + section);
       const html = (await readFile(new URL(section + '.' + language + '.html', root), 'utf8'))
         .replaceAll('__IDENTITY_ORIGIN__', issuer.origin);
-      app.get(path, async (_request, reply) => reply.header('content-security-policy', `${protocolPageCsp}; form-action 'self'`)
-        .type('text/html; charset=utf-8').send(html));
+      const send = async (_request: unknown, reply: FastifyReply) => reply.header('content-security-policy', `${protocolPageCsp}; form-action 'self'`)
+        .type('text/html; charset=utf-8').send(html);
+      app.get(path, send);
+      // The account center and the instance console keep their open tab in the path.
+      if (section === 'workspace' || section === 'admin') app.get(path + '/:tab', send);
+      if (section === 'workspace') app.get(path + '/settings/account', send);
     }
   }
   app.get('/zh', async (_request, reply) => reply.redirect('/zh/', 308));
@@ -49,6 +59,13 @@ export async function registerBrowserPage(app: FastifyInstance, issuer: URL) {
       .type(type).send(createReadStream(asset)));
   }
 
-  return (view: ProtocolView, invalid = false, providerForm?: string, registration?: string) => page.replace(mount,
-    () => `${providerForm ? `<div hidden>${providerForm}</div>` : ''}<div id="root" data-protocol="${view}" data-invalid="${invalid}"${registration ? ` data-registration="${registration}"` : ''}></div>`);
+  return (view: ProtocolView, options: ProtocolOptions = {}) => {
+    const data = Object.entries({
+      protocol: view, invalid: String(Boolean(options.invalid)), throttled: options.throttled ? 'true' : undefined,
+      registration: options.registration, recover: options.recover, language: options.language ?? 'en',
+      'app-name': options.appName, 'app-url': options.appUrl,
+    }).flatMap(([name, value]) => value === undefined ? [] : [` data-${name}="${attribute(value)}"`]).join('');
+    return page.replace('<html lang="en">', () => `<html lang="${options.language ?? 'en'}">`)
+      .replace(mount, () => `${options.form ? `<div hidden>${options.form}</div>` : ''}<div id="root"${data}></div>`);
+  };
 }

@@ -8,7 +8,7 @@ import { request } from 'node:https';
 import { createServer } from 'node:tls';
 import { spawn } from 'node:child_process';
 import selfsigned from 'selfsigned';
-import { connect, createAccount, getAccount, grantAcceptanceOperator, migrate } from '../dist/database.js';
+import { connect, createAccount, getAccount, grantAcceptanceOperator, migrate, schemaVersion, setInstanceRole } from '../dist/database.js';
 import { initializeSecrets } from '../dist/settings.js';
 import { service } from '../dist/service.js';
 
@@ -100,10 +100,12 @@ let app;
 try {
   await dbAdmin.query(`CREATE SCHEMA "${schema}"`);
   await initializeSecrets(process.env.IDENTITY_SECRETS_DIR);
-  assert.deepEqual(await migrate(pool), { version: 4, changed: true });
-  assert.deepEqual(await migrate(pool), { version: 4, changed: false });
+  assert.deepEqual(await migrate(pool), { version: schemaVersion, changed: true });
+  assert.deepEqual(await migrate(pool), { version: schemaVersion, changed: false });
   await createAccount(pool, operator, password);
   await createAccount(pool, member, password);
+  // Registration opens once the instance has its first administrator.
+  await setInstanceRole(pool, operator, true);
   app = await service(pool);
 
   const vanityHost = new URL(gateway).host;
@@ -128,8 +130,13 @@ try {
   assert.match(enrollment.cookie, /^__Host-niltavi-enrollment=[\w-]{43}; Path=\/; Max-Age=900; HttpOnly; Secure; SameSite=Lax$/);
   const enrollmentCookie = enrollment.cookie.split(';', 1)[0];
   assert.equal((await http('/account/login', { body: { email, password } })).status, 401);
-  assert.equal(messages.length, 1);
-  const code = messages[0].match(/^([\w-]{32})$/m)?.[1];
+  // The message leaves after the response, so that the reply never depends on the recipient.
+  const delivered = async (count) => {
+    for (let i = 0; i < 100 && messages.length < count; i += 1) await new Promise((done) => setTimeout(done, 50));
+    assert.equal(messages.length, count);
+    return messages[count - 1].match(/^(\d{6})$/m)?.[1];
+  };
+  const code = await delivered(1);
   assert.ok(code);
   assert.equal((await http('/account/verify', { cookie: enrollmentCookie, body: { email, code: 'X'.repeat(32) } })).status, 400);
   assert.equal((await http('/account/verify', { body: { email, code } })).status, 400);
@@ -141,7 +148,7 @@ try {
   const { id } = await getAccount(pool, email);
   const workEnrollment = await http('/account/register', { body: { email: work, password } });
   assert.equal(workEnrollment.status, 202);
-  const workCode = messages[1].match(/^([\w-]{32})$/m)?.[1];
+  const workCode = await delivered(2);
   assert.ok(workCode);
   assert.equal((await http('/account/verify', { cookie: workEnrollment.cookie.split(';', 1)[0], body: { email: work, code: workCode } })).status, 201);
   console.log('Two isolated mailbox domains, TLS SMTP delivery, cookie-bound verification, and single-use confirmation passed.');
@@ -202,33 +209,32 @@ try {
         'network.dns.localDomains': new URL(issuer).hostname },
     });
     try {
-      const page = browser.pages()[0];
       for (const address of ['browser@personal.example.test', 'browser@work.example.test']) {
+        const page = await browser.newPage();
         await page.goto(issuer + '/register');
         await expect(page.locator('form input')).toHaveCount(2);
-        await page.getByLabel('Email', { exact: true }).fill(address);
-        await page.getByLabel('Password', { exact: true }).fill(password);
-        await page.getByRole('button', { name: 'Register by email', exact: true }).click();
+        await page.getByLabel('Email').fill(address);
+        await page.getByLabel('Password').fill(password);
+        const expectedMessage = messages.length + 1;
+        await page.getByRole('button', { name: 'Create account', exact: true }).click();
         const codeField = page.getByLabel('Verification code', { exact: true });
         await expect(codeField).toBeVisible();
-        const realCode = messages.at(-1).match(/^([\w-]{32})$/m)?.[1];
+        const realCode = await delivered(expectedMessage);
         assert.ok(realCode);
-        await codeField.fill('X'.repeat(32));
-        await page.getByRole('button', { name: 'Verify and create account' }).click();
-        await expect(page.getByText(/The code is invalid/)).toBeVisible();
+        await codeField.fill(realCode === '000000' ? '111111' : '000000');
+        await page.getByRole('button', { name: 'Verify and continue' }).click();
+        await expect(page.getByText(/code is incorrect|code is invalid/i)).toBeVisible();
         await codeField.fill(realCode);
-        await page.getByRole('button', { name: 'Verify and create account' }).click();
-        await page.waitForURL(issuer + '/login');
-        await page.getByLabel('Email', { exact: true }).fill(address);
-        await page.getByLabel('Password', { exact: true }).fill(password);
-        await page.getByRole('button', { name: 'Sign in by email', exact: true }).click();
+        await page.getByRole('button', { name: 'Verify and continue' }).click();
         await page.waitForURL(issuer + '/workspace');
-        await expect(page.getByRole('heading', { name: 'My workspace' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Account center' })).toBeVisible();
         await expect(page.getByText('Verified', { exact: true })).toBeVisible();
         await page.reload();
         await expect(page.getByText('Verified', { exact: true })).toBeVisible();
-        await page.getByRole('button', { name: 'Sign out' }).click();
+        await page.getByRole('tab', { name: 'Sessions' }).click();
+        await page.getByRole('button', { name: 'Sign out of the account center' }).click();
         await page.waitForURL(issuer + '/login');
+        await page.close();
       }
       console.log('Headless registration with email and password, real fixture delivery, wrong-code check, workspace reload and logout passed on both mailbox domains.');
     } finally { await browser.close(); }

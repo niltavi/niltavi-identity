@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { errors } from 'oidc-provider';
 import type { Adapter, AdapterPayload } from 'oidc-provider';
 import type { Pool } from 'pg';
+import type { Queryable } from './database.js';
 
 const readable = `
   SELECT r.account_id, r.account_epoch, r.payload || CASE
@@ -20,9 +21,17 @@ function storageKey(id: string) {
   return createHash('sha256').update(id).digest('hex');
 }
 
-export function createProtocolStore(pool: Pool, realm?: string) {
+export type ClientLookup = (id: string) => Promise<AdapterPayload | undefined>;
+export type CentralSession = { key: string; signedInAt: Date | null; expiresAt: Date | null; apps: Array<{ id: string; sid: string }> };
+
+export function createProtocolStore(pool: Pool, realm?: string, clients?: ClientLookup) {
   const requests = new AsyncLocalStorage<Map<string, number>>();
   const prefix = realm ? `${storageKey(realm)}:` : '';
+  const grantModel = `${prefix}Grant`;
+  const revokedGrant = (grantId: string) => `EXISTS (
+    SELECT 1 FROM oidc_records g WHERE g.model = '${grantModel}' AND g.account_id = r.account_id
+      AND g.payload ->> 'jti' = ${grantId} AND g.consumed_at IS NOT NULL
+  )`;
 
   function remember(accountId: string, epoch: number) {
     const observed = requests.getStore();
@@ -34,11 +43,16 @@ export function createProtocolStore(pool: Pool, realm?: string) {
 
   class PostgresAdapter implements Adapter {
     private readonly model: string;
+    private readonly preventRevival: boolean;
     private readonly replayDetection: boolean;
+    private readonly registry: boolean;
 
     constructor(model: string) {
       this.model = `${prefix}${model}`;
+      this.preventRevival = model === 'Grant' || model === 'Session';
       this.replayDetection = model === 'ReplayDetection';
+      // Registered applications live in their own table, so a new registration works without a restart.
+      this.registry = model === 'Client';
     }
 
     async upsert(id: string, payload: AdapterPayload, expiresIn?: number) {
@@ -62,8 +76,10 @@ export function createProtocolStore(pool: Pool, realm?: string) {
          SET payload = EXCLUDED.payload, expires_at = EXCLUDED.expires_at,
              account_id = EXCLUDED.account_id, account_epoch = EXCLUDED.account_epoch,
              consumed_at = CASE WHEN $7::boolean THEN NULL ELSE oidc_records.consumed_at END
-         WHERE NOT $7::boolean OR oidc_records.expires_at <= clock_timestamp()`,
-        [this.model, storageKey(id), JSON.stringify(payload), expiresIn ?? null, accountId, epoch, this.replayDetection],
+         WHERE (NOT $7::boolean OR oidc_records.expires_at <= clock_timestamp())
+           AND (NOT $8::boolean OR oidc_records.consumed_at IS NULL)`,
+        [this.model, storageKey(id), JSON.stringify(payload), expiresIn ?? null, accountId, epoch,
+          this.replayDetection, this.preventRevival],
       );
       if (result.rowCount !== 1) {
         throw new errors.InvalidGrant('The grant is no longer available');
@@ -71,6 +87,7 @@ export function createProtocolStore(pool: Pool, realm?: string) {
     }
 
     find(id: string) {
+      if (this.registry) return clients?.(id) ?? Promise.resolve(undefined);
       return this.read('r.storage_key', storageKey(id));
     }
 
@@ -85,7 +102,9 @@ export function createProtocolStore(pool: Pool, realm?: string) {
     private async read(column: string, value: string) {
       const result = await pool.query<{
         payload: AdapterPayload; account_id: string | null; account_epoch: number | null;
-      }>(`${readable} AND ${column} = $2`, [this.model, value]);
+      }>(`${readable} AND ${column} = $2
+          AND (NOT $3::boolean OR r.consumed_at IS NULL)
+          AND NOT ${revokedGrant("r.payload ->> 'grantId'")}`, [this.model, value, this.preventRevival]);
       const row = result.rows[0];
       if (row?.account_id && row.account_epoch !== null && !remember(row.account_id, row.account_epoch)) {
         return undefined;
@@ -106,8 +125,13 @@ export function createProtocolStore(pool: Pool, realm?: string) {
     }
 
     async destroy(id: string) {
-      await pool.query('DELETE FROM oidc_records WHERE model = $1 AND storage_key = $2', [
-        this.model, storageKey(id),
+      if (this.model === sessionModel) {
+        await pool.query(`UPDATE oidc_records SET consumed_at = clock_timestamp()
+          WHERE model = $1 AND storage_key = $2 AND consumed_at IS NULL`, [this.model, storageKey(id)]);
+        return;
+      }
+      await pool.query('DELETE FROM oidc_records WHERE model = $1 AND storage_key = $2 AND (model <> $3 OR consumed_at IS NULL)', [
+        this.model, storageKey(id), grantModel,
       ]);
     }
 
@@ -126,8 +150,94 @@ export function createProtocolStore(pool: Pool, realm?: string) {
     return account !== undefined && remember(id, account.security_epoch);
   }
 
+  const live = `(r.expires_at IS NULL OR r.expires_at > clock_timestamp()) AND a.enabled AND a.security_epoch = r.account_epoch`;
+  const sessionModel = `${prefix}Session`;
+
+  // A central session is the browser's sign-in at Identity. Each application it opened holds its own sid.
+  async function sessions(account: string): Promise<CentralSession[]> {
+    const result = await pool.query<{
+      storage_key: string; payload: AdapterPayload; expires_at: Date | null; apps: CentralSession['apps'];
+    }>(
+      `SELECT r.storage_key, r.payload, r.expires_at, ARRAY(
+         SELECT jsonb_build_object('id', app.key, 'sid', app.value ->> 'sid')
+         FROM jsonb_each(COALESCE(r.payload -> 'authorizations', '{}'::jsonb)) app
+         WHERE app.value ->> 'sid' IS NOT NULL AND NOT ${revokedGrant("app.value ->> 'grantId'")}
+       ) AS apps
+       FROM oidc_records r JOIN accounts a ON a.id = r.account_id
+       WHERE r.model = $1 AND r.account_id = $2 AND r.consumed_at IS NULL AND ${live}
+       ORDER BY r.payload ->> 'loginTs' DESC`, [sessionModel, account]);
+    return result.rows.map(({ storage_key: key, payload, expires_at: expiresAt, apps }) => ({
+      key, expiresAt, apps,
+      signedInAt: typeof payload.loginTs === 'number' ? new Date(payload.loginTs * 1_000) : null,
+    }));
+  }
+
+  async function sessionActive(account: string, client: string, sid: string) {
+    return Boolean((await pool.query(
+      `SELECT 1 FROM oidc_records r JOIN accounts a ON a.id = r.account_id
+       WHERE r.model = $1 AND r.account_id = $2 AND r.consumed_at IS NULL AND ${live}
+         AND r.payload -> 'authorizations' -> $3 ->> 'sid' = $4
+         AND NOT ${revokedGrant("r.payload -> 'authorizations' -> $3 ->> 'grantId'")}`,
+      [sessionModel, account, client, sid])).rowCount);
+  }
+
+  async function applications(account: string) {
+    return (await pool.query<{ id: string; name: string; url: string }>(
+      `SELECT p.id, p.name, p.home_url AS url FROM applications p
+       WHERE p.enabled AND EXISTS (
+         SELECT 1 FROM oidc_records r JOIN accounts a ON a.id = r.account_id
+         WHERE r.account_id = $1 AND (r.model = 'Grant' OR r.model LIKE '%:Grant')
+           AND r.payload ->> 'clientId' = p.id AND r.consumed_at IS NULL AND ${live}
+       )
+       ORDER BY p.name, p.id`, [account])).rows;
+  }
+
+  // Keep revoked grant IDs so that an in-flight token or session write cannot restore access.
+  // The account is locked by the caller. The authorization belongs to the account across issuers.
+  async function revokeApplication(db: Queryable, account: string, client: string) {
+    const grants = await db.query<{ id: string }>(
+      `UPDATE oidc_records SET consumed_at = clock_timestamp()
+       WHERE account_id = $1 AND payload ->> 'clientId' = $2 AND consumed_at IS NULL
+         AND (model = 'Grant' OR model LIKE '%:Grant')
+       RETURNING payload ->> 'jti' AS id`, [account, client]);
+    if (!grants.rowCount) return undefined;
+    return (await db.query<{ id: string; sid: string }>(
+      `SELECT DISTINCT $3::text AS id, r.payload -> 'authorizations' -> $3 ->> 'sid' AS sid
+       FROM oidc_records r JOIN accounts a ON a.id = r.account_id
+       WHERE r.model = $1 AND r.account_id = $2 AND r.consumed_at IS NULL AND ${live}
+         AND r.payload -> 'authorizations' -> $3 ->> 'grantId' = ANY($4::text[])
+         AND r.payload -> 'authorizations' -> $3 ->> 'sid' IS NOT NULL`,
+      [sessionModel, account, client, grants.rows.map(({ id }) => id)])).rows;
+  }
+
+  // Keep the session and grant revocations until expiration so an in-flight write cannot revive them.
+  // The caller commits both changes together before notifying applications.
+  async function endSession(db: Queryable, account: string, key: string) {
+    const removed = (await db.query<{ payload: AdapterPayload }>(
+      `UPDATE oidc_records SET consumed_at = clock_timestamp()
+       WHERE model = $1 AND account_id = $2 AND storage_key = $3 AND consumed_at IS NULL RETURNING payload`,
+      [sessionModel, account, key])).rows[0];
+    if (!removed) return undefined;
+    const entries = Object.entries((removed.payload.authorizations ?? {}) as Record<string, { sid?: string; grantId?: string }>);
+    const grants = entries.flatMap(([, entry]) => entry.grantId ? [entry.grantId] : []);
+    if (grants.length) {
+      await db.query(`UPDATE oidc_records SET consumed_at = clock_timestamp()
+        WHERE account_id = $1 AND model = $3 AND consumed_at IS NULL AND payload ->> 'jti' = ANY($2::text[])`,
+      [account, grants, grantModel]);
+    }
+    return entries.flatMap(([id, entry]) => entry.sid ? [{ id, sid: entry.sid }] : []);
+  }
+
+  // The client an authorization request named, read even after the request has expired.
+  async function interactionClient(uid: string) {
+    return (await pool.query<{ client: string | null }>(
+      "SELECT payload -> 'params' ->> 'client_id' AS client FROM oidc_records WHERE model = $1 AND storage_key = $2",
+      [`${prefix}Interaction`, storageKey(uid)])).rows[0]?.client ?? undefined;
+  }
+
   return {
     Adapter: PostgresAdapter,
+    sessions, sessionActive, applications, revokeApplication, endSession, interactionClient,
     isEnabled,
     remember,
     request<T>(work: () => T) { return requests.run(new Map(), work); },

@@ -2,7 +2,23 @@
 
 Self-hosted accounts and OpenID Connect single sign-on for your applications. Users can sign in across connected apps and manage their sessions in one place.
 
-[Website](https://identity.testenv.niltavi.com/)
+[Try the test deployment](https://identity.testenv.niltavi.com/)
+
+## Screenshots
+
+English screenshots from a running Identity instance with demo data.
+
+### Accounts
+
+![Account list showing administrator roles, verification and disabled states, and the account management menu](docs/screenshots/admin-accounts.png)
+
+### Applications
+
+![OpenID Connect application list with enable, disable, and client secret controls above the registration form](docs/screenshots/admin-applications.png)
+
+### Teams
+
+![Teams page in the account center showing the Fieldwork Studio team, member roles, and a pending invitation](docs/screenshots/account-teams.png)
 
 <br />
 

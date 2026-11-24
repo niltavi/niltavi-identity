@@ -1,4 +1,23 @@
-# First-round identity service acceptance
+# Identity service acceptance
+
+## Product requirement suites
+
+These suites prove the guarantees in the [contract](en/authentication.md). Each runs the real service over HTTPS on a throwaway schema of the lab database (`docker compose up -d --wait`).
+
+| Command | Proves |
+| --- | --- |
+| `npm run test:prd` | First-run setup with and without outgoing mail, the password rule, registration privacy with outgoing mail, recovery, single-use codes and links, teams and the last owner, the second factor on the instance console, Agent and service tokens, key rotation, revocation that survives a restart, rate limits, and a scan of the audit trail, the database and the log for secrets. |
+| `npm run test:sdk` | The application side, through the SDK and two copies of the example application: return to the original page, single sign-on, the 60-second check with notifications reachable and unreachable, the 5-minute limit when Identity is unreachable, and the three sign-out scopes. |
+| `npm run test:account` | The account API over the gateway and origin listeners, TLS mail delivery and scoped acceptance operators. |
+| `npm test` | Types and the protocol lab. |
+
+Run `node acceptance/web-ui.mjs` against a fresh local stack to check the setup wizard, account center, instance console and both sample application flows. The script header gives the local stack command and test port. The test initializes its own instance and uses the local mailbox, so keep the stack for manual review separate.
+
+Release acceptance requires the instance owner to confirm SMTP delivery to a personal and a work address. Run the two-application sign-in, invitation and removal journeys against Flagstone and Wattlework after they have adopted the SDK and received their own client registrations. Send the Orangery authorization request with its exact registered callback. Open registration on an instance that skips mail takes the user directly to the account on success and returns a distinct response for an address already in use. Track that case separately from the verified-mail registration privacy check.
+
+The sections below record the first-round runs. The contract supersedes their endpoint details.
+
+## First round
 
 The [current account and OIDC contract](en/authentication.md) supersedes the endpoint details in the historical runs below. For the revised browser suite, build the server and site, set the dedicated lab database and the profile-local TLS variables below, then run `node acceptance/browser-auth.mjs`. It covers both locale URLs, keyboard and layout, delayed configuration and JavaScript, two isolated mailbox domains, workspace persistence and session boundaries. The built-site test runner can also target an authorized HTTPS URL directly with `node acceptance/website.mjs <origin>`.
 

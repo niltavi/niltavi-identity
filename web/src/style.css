@@ -1,6 +1,15 @@
 @import "../vendor/niltavi-ui/theme/index.css";
+@import "../vendor/niltavi-ui/theme/motion.css";
+@import "../vendor/niltavi-ui/templates/saas/navigation.css";
 @source "./main.tsx";
 @source "./site.tsx";
+@source "./ui.tsx";
+@source "./protocol.tsx";
+@source "./auth.tsx";
+@source "./setup.tsx";
+@source "./sidebar-layout.tsx";
+@source "./workspace.tsx";
+@source "./admin.tsx";
 @source "../vendor/niltavi-ui/product";
 
 @theme {
@@ -10,4 +19,49 @@
   --breakpoint-lg: 992px;
   --breakpoint-xl: 1200px;
   --breakpoint-2xl: 1400px;
+}
+
+@layer components {
+  .app-shell {
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  .app-shell > header { flex-shrink: 0; }
+  .app-shell > main { min-height: 0; overflow-y: auto; }
+
+  .app-content {
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+
+  .app-content:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: -2px;
+  }
+
+  .sidebar-frame {
+    display: flex;
+    flex-direction: column;
+    width: calc(var(--spacing) * 12);
+    min-height: 0;
+    padding: calc(var(--spacing) * 2);
+    border-inline-end: var(--border-width) solid var(--separator);
+    background: var(--surface-secondary);
+  }
+
+  @media (min-width: 768px) {
+    .sidebar-frame {
+      width: auto;
+      padding: 0;
+      border: 0;
+    }
+  }
+
+  .sidebar-drawer-body > .nt-side {
+    width: 100%;
+    min-height: 0;
+    flex: 1;
+    border: 0;
+  }
 }

@@ -13,6 +13,13 @@ export function readBrowserCookie(request: FastifyRequest, name: string) {
   return value && /^[\w-]{43}$/.test(value) ? value : undefined;
 }
 
+export function browserCookie(name: string, value: string, maxAge: number) {
+  return name + '=' + value + '; Path=/; Max-Age=' + maxAge + '; HttpOnly; Secure; SameSite=Lax';
+}
+
+// A response can carry several cookies, so each call adds a header instead of replacing one.
 export function setBrowserCookie(reply: FastifyReply, name: string, value: string, maxAge: number) {
-  reply.header('set-cookie', name + '=' + value + '; Path=/; Max-Age=' + maxAge + '; HttpOnly; Secure; SameSite=Lax');
+  const existing = reply.getHeader('set-cookie');
+  const prior = existing === undefined ? [] : Array.isArray(existing) ? existing : [String(existing)];
+  reply.header('set-cookie', [...prior.filter((cookie) => !cookie.startsWith(name + '=')), browserCookie(name, value, maxAge)]);
 }
