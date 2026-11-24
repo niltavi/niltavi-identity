@@ -1,0 +1,13 @@
+@import "../vendor/niltavi-ui/theme/index.css";
+@source "./main.tsx";
+@source "./site.tsx";
+@source "../vendor/niltavi-ui/product";
+
+@theme {
+  --breakpoint-*: initial;
+  --breakpoint-sm: 576px;
+  --breakpoint-md: 768px;
+  --breakpoint-lg: 992px;
+  --breakpoint-xl: 1200px;
+  --breakpoint-2xl: 1400px;
+}
