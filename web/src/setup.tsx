@@ -5,6 +5,7 @@ import { call, codeOf, forgetLinkToken, linkToken, problem } from './api';
 import { Choice, CodeField, CredentialsForm, Notice, PageLink, TaskFeedback, readForm, useApp, useTask } from './ui';
 
 type MailValues = { host: string; port: string; security: string; username: string; password: string; from: string };
+type MailDraft = Omit<MailValues, 'password' | 'security'>;
 
 // Outgoing mail is saved only after the person types back the code from a test message.
 export function MailSetup({ begin, confirm, onConfirmed, defaults, disabled }: {
@@ -14,13 +15,18 @@ export function MailSetup({ begin, confirm, onConfirmed, defaults, disabled }: {
   const { t, language } = useApp();
   const task = useTask();
   const [security, setSecurity] = useState(String(defaults?.security ?? 'starttls'));
+  const [draft, setDraft] = useState<MailDraft>();
   const [sentTo, setSentTo] = useState<string>();
   const [codeError, setCodeError] = useState<string>();
 
   if (sentTo) {
     return <div className="grid gap-4">
-      <p className="wrap-anywhere" role="status">{t(`We sent a test message with a 6-digit code to ${sentTo}. Enter it to save these settings.`,
-        `测试邮件已发送到 ${sentTo}，其中有 6 位验证码。输入验证码后保存这些设置。`)}</p>
+      <div className="grid gap-2">
+        <p className="wrap-anywhere" role="status">{t(`Your mail server accepted the test message for ${sentTo}. When it arrives, enter the 6-digit code to save these settings.`,
+          `发信服务器已接收发往 ${sentTo} 的测试邮件。收到邮件后，输入 6 位验证码即可保存设置。`)}</p>
+        <p className="text-sm text-muted">{t('If the message doesn’t arrive, check your spam folder and look for a bounce notice in the sender’s mailbox.',
+          '如果没收到，请查看垃圾邮件，并检查发件邮箱里有没有退信。')}</p>
+      </div>
       <TaskFeedback task={task} />
       <Form className="grid max-w-sm gap-3" validationBehavior="native" onSubmit={event => {
         const code = readForm(event)('code').trim();
@@ -37,34 +43,42 @@ export function MailSetup({ begin, confirm, onConfirmed, defaults, disabled }: {
         <CodeField label={t('Code from the test message', '测试邮件中的验证码')} error={codeError} onInput={() => setCodeError(undefined)} />
         <div className="flex flex-wrap gap-2">
           <Button type="submit" isPending={task.pending === 'confirm'}>{t('Confirm and save', '确认并保存')}</Button>
-          <Button variant="tertiary" onPress={() => { setSentTo(undefined); setCodeError(undefined); }}>{t('Change settings', '修改设置')}</Button>
+          <Button variant="tertiary" isDisabled={task.pending === 'confirm'} onPress={() => {
+            setSentTo(undefined);
+            setCodeError(undefined);
+            task.setError(undefined);
+          }}>{t('Change settings', '修改设置')}</Button>
         </div>
       </Form>
     </div>;
   }
+  const initial = draft ?? defaults;
   return <Form className="grid gap-4" validationBehavior="native" onSubmit={event => {
     const field = readForm(event);
+    const settings = { host: field('host').trim(), port: field('port').trim(),
+      username: field('username'), from: field('from').trim() };
+    const password = field('smtp-password');
     void task.run('test', async () => {
-      const result = await begin({ host: field('host').trim(), port: field('port').trim(), security,
-        username: field('username'), password: field('smtp-password'), from: field('from').trim() });
+      const result = await begin({ ...settings, security, password });
+      setDraft(settings);
       setSentTo(result.sentTo);
     });
   }}>
     <TaskFeedback task={task} />
     <fieldset className="m-0 grid min-w-0 gap-4 border-0 p-0 sm:grid-cols-2" disabled={Boolean(disabled)}>
-      <TextField name="host" isRequired defaultValue={String(defaults?.host ?? '')}>
+      <TextField name="host" isRequired defaultValue={String(initial?.host ?? '')}>
         <Label>{t('SMTP server', 'SMTP 服务器')}</Label><Input className="w-full min-w-0" autoCapitalize="none" spellCheck="false" />
       </TextField>
-      <TextField name="port" isRequired defaultValue={String(defaults?.port ?? '587')}>
+      <TextField name="port" isRequired defaultValue={String(initial?.port ?? '587')}>
         <Label>{t('Port', '端口')}</Label><Input className="w-full min-w-0" inputMode="numeric" pattern="[0-9]{1,5}" />
       </TextField>
       <Choice label={t('Encryption', '加密方式')} value={security} onChange={setSecurity} isDisabled={Boolean(disabled)} options={[
         { id: 'starttls', label: 'STARTTLS' }, { id: 'tls', label: 'TLS' },
         { id: 'none', label: t('None (server on this machine only)', '无（仅限本机服务器）') }]} />
-      <TextField name="from" type="email" isRequired defaultValue={String(defaults?.from ?? '')}>
+      <TextField name="from" type="email" isRequired defaultValue={String(initial?.from ?? '')}>
         <Label>{t('Sender address', '发件人地址')}</Label><Input className="w-full min-w-0" />
       </TextField>
-      <TextField name="username" defaultValue={String(defaults?.username ?? '')}>
+      <TextField name="username" defaultValue={String(initial?.username ?? '')}>
         <Label>{t('Username', '用户名')}</Label><Input className="w-full min-w-0" autoComplete="off" autoCapitalize="none" spellCheck="false" />
         <Description>{t('Leave empty if the server needs no sign-in.', '服务器无需登录时留空。')}</Description>
       </TextField>
