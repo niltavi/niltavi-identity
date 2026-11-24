@@ -1,0 +1,5 @@
+services:
+  identity:
+    environment:
+      IDENTITY_DEPLOYMENT_PROFILE: hosted
+      IDENTITY_TESTENV_UNVERIFIED_SIGNUP: 'true'

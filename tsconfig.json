@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "NodeNext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "lab/**/*.ts", "preview/*.ts", "acceptance/*.ts", "playwright*.config.ts"]
+}
