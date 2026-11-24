@@ -2,7 +2,23 @@
 
 Self-hosted accounts and OpenID Connect single sign-on for your applications. Users can sign in across connected apps and manage their sessions in one place.
 
-[Website](https://identity.testenv.niltavi.com/)
+[Try the test deployment](https://identity.testenv.niltavi.com/)
+
+## Screenshots
+
+English desktop views from the test deployment, captured at 1920 × 1080.
+
+### Home
+
+![Niltavi Identity homepage with links to install the service and create an account](docs/screenshots/home.png)
+
+### Sign in
+
+![Sign-in form with email and password fields and a password reset link](docs/screenshots/sign-in.png)
+
+### Registration
+
+![Account registration form with email and password fields](docs/screenshots/registration.png)
 
 <br />
 
