@@ -1,6 +1,6 @@
 import { Button, Drawer, Link, RouterProvider } from '@heroui/react';
 import Bars from '@gravity-ui/icons/Bars';
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { ComponentType, ReactNode, SVGProps } from 'react';
 import { container, pathFor, routeFor } from './site';
 import type { Route } from './site';
@@ -21,6 +21,12 @@ export function SidebarLayout({ title, navigation, openNavigation, section, page
 }) {
   const { language, navigate, t } = useApp();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const isAdmin = section === 'admin';
+  const contentRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    if (contentRef.current) contentRef.current.scrollTop = 0;
+  }, [activeTab]);
+
   const closeNavigation = () => setDrawerOpen(false);
   function followSidebarLink(href: string) {
     const { pathname, search } = new URL(href, window.location.href);
@@ -45,8 +51,9 @@ export function SidebarLayout({ title, navigation, openNavigation, section, page
     </nav>
     {footer && <div className="border-t border-separator pt-2">{footer(closeNavigation)}</div>}
   </>;
-  return <div className="grid flex-1 grid-cols-[auto_minmax(0,1fr)]">
-    <RouterProvider navigate={followSidebarLink}><aside className="sidebar-rail">
+  const contentClass = `${container} grid min-w-0 content-start gap-5 py-8 md:py-12`;
+  return <div className={`grid flex-1 grid-cols-[auto_minmax(0,1fr)] ${isAdmin ? 'min-h-0 grid-rows-[minmax(0,1fr)]' : ''}`}>
+    <RouterProvider navigate={followSidebarLink}><aside className={isAdmin ? 'sidebar-rail sidebar-rail--viewport' : 'sidebar-rail'}>
       <Drawer isOpen={drawerOpen} onOpenChange={setDrawerOpen}>
         <Button size="sm" variant="ghost" isIconOnly className="md:hidden" aria-label={openNavigation}>
           <Bars width={18} height={18} aria-hidden="true" />
@@ -65,6 +72,8 @@ export function SidebarLayout({ title, navigation, openNavigation, section, page
       </Drawer>
       <div className="hidden min-h-0 flex-1 flex-col gap-3 md:flex">{sidebar}</div>
     </aside></RouterProvider>
-    <main className={`${container} grid min-w-0 content-start gap-5 py-8 md:py-12`}>{children}</main>
+    {isAdmin ? <main ref={contentRef} tabIndex={0} className="admin-content min-h-0 min-w-0">
+      <div className={contentClass}>{children}</div>
+    </main> : <main className={contentClass}>{children}</main>}
   </div>;
 }

@@ -270,6 +270,39 @@ await journey('console navigation opens from the left and works by keyboard on m
   await page.context().close();
 });
 
+await journey('console scrolls the content without moving the header or navigation', async () => {
+  for (const width of [320, 1280]) {
+    const page = await session({ viewport: { width, height: 420 }, colorScheme: width === 320 ? 'dark' : 'light' });
+    await page.context().addCookies(await owner.context().cookies());
+    await page.goto(origin + '/admin/applications');
+    await page.getByRole('button', { name: 'Register application' }).waitFor({ state: 'attached' });
+    const content = page.getByRole('main');
+    const header = page.getByRole('banner');
+    const trigger = page.getByRole('button', { name: 'Open instance console navigation' });
+    const navigation = width === 320 ? trigger : page.getByRole('navigation', { name: 'Instance console navigation' });
+    const headerBefore = await header.boundingBox();
+    const navigationBefore = await navigation.boundingBox();
+    assert.ok(await content.evaluate(node => node.scrollHeight > node.clientHeight));
+    await content.hover();
+    await page.mouse.wheel(0, 240);
+    await expect.poll(() => content.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+    await content.press('End');
+    await expect.poll(() => content.evaluate(node => node.scrollHeight - node.clientHeight - node.scrollTop)).toBeLessThan(2);
+    assert.deepEqual(await header.boundingBox(), headerBefore);
+    assert.deepEqual(await navigation.boundingBox(), navigationBefore);
+    assert.ok(await page.evaluate(() => {
+      const doc = document.scrollingElement;
+      return doc.scrollTop === 0 && doc.scrollHeight === doc.clientHeight;
+    }));
+
+    if (width === 320) await trigger.click();
+    await page.getByRole('navigation', { name: 'Instance console navigation' }).getByRole('link', { name: 'Audit log' }).click();
+    await page.waitForURL(origin + '/admin/audit');
+    await expect.poll(() => content.evaluate(node => node.scrollTop)).toBe(0);
+    await page.context().close();
+  }
+});
+
 await journey('register with mail: password errors only after validation, 6-digit code, signed in', async () => {
   adaPage = await session();
   await adaPage.goto(origin + '/register');
