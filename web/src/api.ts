@@ -10,6 +10,7 @@ export type Settings = {
   registrationMode: 'verify-email' | 'unverified-testenv' | 'immediate';
   registrationPolicy: 'open' | 'invite'; recoveryAvailable: boolean;
   passwordRule: { minimum: number; maximum: number };
+  passwordlessAvailable: boolean;
   registrationDomain?: string;
   applications: Array<{ id: string; name: string; url: string }>;
 };

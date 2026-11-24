@@ -5,6 +5,7 @@ import {
   applyAccountEnabled, audit, getSetting, markEmailVerified, operatorResetLink, registerApplication, rotateApplicationSecret,
   setApplicationEnabled, setInstanceRole, setSetting, standardApplication, transaction,
 } from './database.js';
+import { PasswordRejected, passwordHash, passwordProblem } from './credentials.js';
 import type { Mailer } from './mail.js';
 import type { Notifier } from './notify.js';
 import { beginMailTest, confirmMailTest, mailFields } from './setup.js';
@@ -96,6 +97,28 @@ export function registerAdmin(app: FastifyInstance, pool: Pool, issuer: URL, web
     const email = await emailOf(request.params.id);
     if (!email || !fields(request)) return failure(reply, 404, 'account_not_found');
     return markEmailVerified(pool, email, viewer.id);
+  });
+
+  app.post<Target>('/admin/api/accounts/:id/set-password', guard, async (request, reply) => {
+    const viewer = await writer(request, reply);
+    if (!viewer) return reply;
+    const [password] = fields(request, 'password') ?? [];
+    if (!password) return failure(reply, 400, 'invalid_password');
+    const problem = passwordProblem(password);
+    if (problem) return failure(reply, 400, problem);
+    const email = await emailOf(request.params.id);
+    if (!email) return failure(reply, 404, 'account_not_found');
+    try {
+      const hash = await passwordHash(password, email);
+      await transaction(pool, async (db) => {
+        await db.query('UPDATE accounts SET password_hash = $2 WHERE id = $1', [request.params.id, hash]);
+        await audit(db, 'account.password_set_by_operator', request.params.id, viewer.id);
+      });
+      return { changed: true };
+    } catch (error) {
+      if (error instanceof PasswordRejected) return failure(reply, 400, error.code);
+      throw error;
+    }
   });
 
   app.post<Target>('/admin/api/accounts/:id/role', guard, async (request, reply) => {

@@ -48,7 +48,7 @@ export async function audit(db: Queryable, action: string, target: string, actor
 }
 
 const migrationFiles = ['schema.sql', 'schema-browser.sql', 'schema-enrollment.sql', 'schema-registration-intents.sql',
-  'schema-teams.sql'];
+  'schema-teams.sql', 'schema-email-codes.sql'];
 export const schemaVersion = migrationFiles.length;
 
 export async function getSetting<T>(db: Queryable, key: string) {
@@ -62,7 +62,7 @@ export async function setSetting(db: Queryable, key: string, value: unknown) {
 }
 
 // Every account owns a personal space from the moment it exists.
-export async function insertAccount(db: Queryable, email: string, hash: string, verified: boolean) {
+export async function insertAccount(db: Queryable, email: string, hash: string | null, verified: boolean) {
   const id = randomUUID();
   const inserted = await db.query(
     `INSERT INTO accounts (id, email, password_hash, email_verified_at) VALUES ($1, $2, $3, CASE WHEN $4 THEN now() END)

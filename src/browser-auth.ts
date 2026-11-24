@@ -64,6 +64,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       registrationAvailable: registrationEnabled && ready,
       registrationMode: testenvSignup ? 'unverified-testenv' : codes ? 'verify-email' : 'immediate',
       registrationPolicy: policy, recoveryAvailable: general, passwordRule,
+      passwordlessAvailable: !testenvSignup && codes,
       registrationDomain: allowedDomain, managedAccounts: process.env.IDENTITY_ACCEPTANCE_OPERATORS === 'true',
       applications: applications.rows,
     };
@@ -92,24 +93,34 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
 
   app.post('/account/register', guard, async (request, reply) => {
     if (!registrationEnabled || !await initialized()) return failure(reply, 503, 'registration_unavailable');
-    const submitted = fields(request, 'email', 'password') ?? fields(request, 'email', 'password', 'invitation');
+    const passwordless = !testenvSignup && await mailer.codes();
+    const submitted = passwordless
+      ? (fields(request, 'email') ?? fields(request, 'email', 'invitation') ?? fields(request, 'email', 'password') ?? fields(request, 'email', 'password', 'invitation'))
+      : (fields(request, 'email', 'password') ?? fields(request, 'email', 'password', 'invitation'));
     let email: string;
     try { email = mailAddress(submitted?.[0] ?? ''); }
     catch { return failure(reply, 400, 'invalid_email'); }
     if (allowedDomain && email.split('@')[1] !== allowedDomain) return failure(reply, 400, 'registration_domain');
     if (!await loginRateAllowed(pool, request.ip, email, 'register', 5)) return failure(reply, 429, 'try_later');
-    if (!testenvSignup && await registrationPolicy(pool) === 'invite') {
-      const invitation = submitted?.[2];
-      const invited = invitation && /^[\w-]{43}$/.test(invitation) && (await pool.query(
+    const inviteOnly = !testenvSignup && await registrationPolicy(pool) === 'invite';
+    if (inviteOnly) {
+      const invitation = submitted?.find((_, i) => i > 0 && /^[\w-]{43}$/.test(submitted[i]!));
+      const invited = invitation && (await pool.query(
         `SELECT 1 FROM invitations WHERE token_digest = $1 AND email = $2 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()`,
         [digest(`invite:${invitation}`), email])).rowCount;
       if (!invited) return failure(reply, 403, 'invitation_required');
     }
-    let hash: string;
-    try { hash = await passwordHash(submitted?.[1] ?? '', email); }
-    catch (error) { return failure(reply, 400, passwordFailure(error)); }
+    const rawPassword = submitted && submitted.length >= 2 && submitted[1] !== undefined && !/^[\w-]{43}$/.test(submitted[1]) ? submitted[1] : undefined;
+    let hash: string | null = null;
+    if (rawPassword !== undefined) {
+      try { hash = await passwordHash(rawPassword, email); }
+      catch (error) { return failure(reply, 400, passwordFailure(error)); }
+    }
     if (testenvSignup || !await mailer.codes()) {
-      // Without outgoing mail the address cannot be verified, so the account starts unverified.
+      if (!hash) {
+        try { hash = await passwordHash('', email); }
+        catch (error) { return failure(reply, 400, passwordFailure(error)); }
+      }
       const created = await transaction(pool, async (db) => {
         const id = await insertAccount(db, email, hash, false);
         if (!id) return undefined;
@@ -128,7 +139,6 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       VALUES ($1, $2, now() + $3 * interval '1 second', $4, $5, now() + $6 * interval '1 second',
         (SELECT token_digest FROM registration_intents WHERE token_digest = $7 AND expires_at > now() AND account_id IS NULL))`,
     [codeKey(enrollment, code), email, enrollmentSeconds, web.keyFor(enrollment), hash, resendSeconds, intentDigest(request, realm) ?? null]);
-    // Both outcomes send one message after the response, so neither the reply nor its timing reveals an existing account.
     const language = mailLanguage(request);
     mailer.later(async () => {
       if (await getLogin(pool, email)) {
@@ -445,6 +455,133 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       return true;
     });
     return confirmed ? { verified: true } : failure(reply, 400, 'invalid_link');
+  });
+
+  const verifyCodeCookie = '__Host-niltavi-email-verify';
+  const verifyCodeSeconds = 900;
+
+  app.post('/account/email/verification-code', guard, async (request, reply) => {
+    const viewer = await web.viewer(request);
+    if (!viewer) return failure(reply, 401, 'sign_in_required');
+    if (!fields(request)) return failure(reply, 400, 'unexpected_body');
+    if (viewer.emailVerified) return failure(reply, 409, 'already_verified');
+    if (!await mailer.codes()) return failure(reply, 503, 'delivery_unavailable');
+    if (!await rateAllowed(pool, [[`verify-code:${viewer.id}`, 3, 900], [`verify-code:source:${request.ip}`, 20]])) {
+      return failure(reply, 429, 'try_later');
+    }
+    const enrollment = randomBytes(32).toString('base64url');
+    const code = verificationCode();
+    await pool.query('DELETE FROM email_verification_codes WHERE expires_at <= now()');
+    await pool.query(`INSERT INTO email_verification_codes (account_id, token_digest, email, expires_at, next_resend_at)
+      VALUES ($1, $2, $3, now() + $4 * interval '1 second', now() + $5 * interval '1 second')
+      ON CONFLICT (account_id) DO UPDATE SET token_digest = EXCLUDED.token_digest, email = EXCLUDED.email,
+        attempts = 0, expires_at = EXCLUDED.expires_at, next_resend_at = EXCLUDED.next_resend_at`,
+    [viewer.id, codeKey(enrollment, code), viewer.email, verifyCodeSeconds, resendSeconds]);
+    const language = mailLanguage(request, viewer.locale);
+    mailer.later(() => mailer.sendCode(viewer.email, code, language));
+    setBrowserCookie(reply, verifyCodeCookie, enrollment, verifyCodeSeconds);
+    return reply.code(202).send({ accepted: true, email: viewer.email });
+  });
+
+  app.post('/account/email/resend-code', guard, async (request, reply) => {
+    const viewer = await web.viewer(request);
+    if (!viewer) return failure(reply, 401, 'sign_in_required');
+    if (!fields(request)) return failure(reply, 400, 'unexpected_body');
+    if (viewer.emailVerified) return failure(reply, 409, 'already_verified');
+    if (!await mailer.codes()) return failure(reply, 503, 'delivery_unavailable');
+    if (!await rateAllowed(pool, [[`verify-code:${viewer.id}`, 3, 900], [`verify-code:source:${request.ip}`, 20]])) {
+      return failure(reply, 429, 'try_later');
+    }
+    const enrollment = randomBytes(32).toString('base64url');
+    const code = verificationCode();
+    const changed = await pool.query(
+      `UPDATE email_verification_codes SET token_digest = $1, attempts = 0,
+          expires_at = now() + $2 * interval '1 second', next_resend_at = now() + $3 * interval '1 second'
+        WHERE account_id = $4 AND expires_at > now() AND next_resend_at <= now()`,
+      [codeKey(enrollment, code), verifyCodeSeconds, resendSeconds, viewer.id]);
+    if (!changed.rowCount) return failure(reply.header('retry-after', String(resendSeconds)), 429, 'resend_wait');
+    const language = mailLanguage(request, viewer.locale);
+    mailer.later(() => mailer.sendCode(viewer.email, code, language));
+    setBrowserCookie(reply, verifyCodeCookie, enrollment, verifyCodeSeconds);
+    return reply.code(202).send({ accepted: true });
+  });
+
+  app.post('/account/email/verify-code', guard, async (request, reply) => {
+    const viewer = await web.viewer(request);
+    if (!viewer) return failure(reply, 401, 'sign_in_required');
+    const [code] = fields(request, 'code') ?? [];
+    const enrollment = readBrowserCookie(request, verifyCodeCookie);
+    if (!enrollment || !code || !/^\d{6}$/.test(code)) return failure(reply, 400, 'invalid_code');
+    if (!await rateAllowed(pool, [[`verify-code-attempt:${viewer.id}`, 12], [`verify-code-day:${viewer.id}`, 30, 86_400]])) {
+      return failure(reply, 429, 'try_later');
+    }
+    const verified = await transaction(pool, async (db) => {
+      const row = (await db.query<{ email: string }>(
+        `DELETE FROM email_verification_codes WHERE account_id = $1 AND token_digest = $2 AND expires_at > now() AND attempts < $3 RETURNING email`,
+        [viewer.id, codeKey(enrollment, code), codeAttempts])).rows[0];
+      if (!row) return false;
+      const account = await db.query('UPDATE accounts SET email_verified_at = now() WHERE id = $1 AND email = $2 AND enabled AND email_verified_at IS NULL',
+        [viewer.id, row.email]);
+      if (!account.rowCount) return false;
+      await audit(db, 'account.email_verified', viewer.id, viewer.id);
+      return true;
+    });
+    if (!verified) {
+      await pool.query('UPDATE email_verification_codes SET attempts = attempts + 1 WHERE account_id = $1', [viewer.id]);
+      return failure(reply, 400, 'invalid_code');
+    }
+    setBrowserCookie(reply, verifyCodeCookie, '', 0);
+    return { verified: true };
+  });
+
+  const loginCodeCookie = '__Host-niltavi-login-code';
+  const loginCodeSeconds = 900;
+
+  app.post('/account/login-code', guard, async (request, reply) => {
+    let email: string;
+    try { email = mailAddress(fields(request, 'email')?.[0] ?? ''); }
+    catch { return failure(reply, 400, 'invalid_email'); }
+    if (!await mailer.codes()) return failure(reply, 503, 'delivery_unavailable');
+    if (!await loginRateAllowed(pool, request.ip, email, 'login-code', 5)) return failure(reply, 429, 'try_later');
+    const enrollment = randomBytes(32).toString('base64url');
+    const code = verificationCode();
+    await pool.query('DELETE FROM login_codes WHERE expires_at <= now()');
+    await pool.query(`INSERT INTO login_codes (token_digest, email, enrollment_digest, expires_at, next_resend_at)
+      VALUES ($1, $2, $3, now() + $4 * interval '1 second', now() + $5 * interval '1 second')
+      ON CONFLICT (enrollment_digest) DO NOTHING`,
+    [codeKey(enrollment, code), email, web.keyFor(enrollment), loginCodeSeconds, resendSeconds]);
+    const language = mailLanguage(request);
+    mailer.later(async () => {
+      const account = await getLogin(pool, email);
+      if (account?.enabled) await mailer.sendCode(email, code, language);
+    });
+    setBrowserCookie(reply, loginCodeCookie, enrollment, loginCodeSeconds);
+    return reply.code(202).send({ accepted: true });
+  });
+
+  app.post('/account/login-verify', guard, async (request, reply) => {
+    const [code] = fields(request, 'code') ?? [];
+    const enrollment = readBrowserCookie(request, loginCodeCookie);
+    if (!enrollment || !code || !/^\d{6}$/.test(code)) return failure(reply, 400, 'invalid_code');
+    if (!await rateAllowed(pool, [[`login-code-verify:source:${request.ip}`, 20]])) return failure(reply, 429, 'try_later');
+    const result = await transaction(pool, async (db) => {
+      const row = (await db.query<{ email: string }>(
+        `DELETE FROM login_codes WHERE token_digest = $1 AND enrollment_digest = $2 AND expires_at > now() AND attempts < $3 RETURNING email`,
+        [codeKey(enrollment, code), web.keyFor(enrollment), codeAttempts])).rows[0];
+      if (!row) return undefined;
+      const account = (await db.query<{ id: string; security_epoch: number; enabled: boolean }>(
+        'SELECT id, security_epoch, enabled FROM accounts WHERE email = $1 FOR UPDATE', [row.email])).rows[0];
+      if (!account?.enabled) return undefined;
+      await audit(db, 'account.signed_in', account.id, account.id, 'code');
+      return { id: account.id, token: await web.issue(db, account.id, account.security_epoch, request) };
+    });
+    if (!result) {
+      await pool.query('UPDATE login_codes SET attempts = attempts + 1 WHERE enrollment_digest = $1', [web.keyFor(enrollment)]);
+      return failure(reply, 400, 'invalid_code');
+    }
+    setBrowserCookie(reply, loginCodeCookie, '', 0);
+    web.grant(reply, result.token);
+    return reply.code(204).send();
   });
 
   async function agentTokens(account: string) {

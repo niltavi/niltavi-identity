@@ -113,7 +113,7 @@ type Listed = {
 };
 
 function Accounts({ console: { overview, reload } }: { console: Console }) {
-  const { t, account: viewer } = useApp();
+  const { t, language, account: viewer } = useApp();
   const time = useTime();
   const task = useTask();
   const [query, setQuery] = useState('');
@@ -127,12 +127,17 @@ function Accounts({ console: { overview, reload } }: { console: Console }) {
   });
   const path = (id: string, action: string) => `/admin/api/accounts/${encodeURIComponent(id)}/${action}`;
 
+  const [settingPassword, setSettingPassword] = useState<{ id: string; email: string }>();
+  const [passwordError, setPasswordError] = useState<string>();
+  const passwordTask = useTask();
+
   function row(entry: Listed) {
     const self = entry.id === viewer?.id;
     const protectedOwner = entry.instanceRole === 'owner' && overview.role !== 'owner';
     const actions = [
       ...(!self && !protectedOwner ? [{ id: 'status', label: entry.enabled ? t('Disable account', '停用账号') : t('Enable account', '启用账号') }] : []),
       { id: 'reset', label: t('Create password reset link', '生成密码重置链接') },
+      { id: 'set-password', label: t('Set password', '设置密码') },
       ...(!entry.emailVerified ? [{ id: 'verify', label: t('Mark email as verified', '标记邮箱为已验证') }] : []),
       ...(overview.role === 'owner' && !self && entry.instanceRole !== 'owner'
         ? [{ id: 'role', label: entry.instanceRole ? t('Remove administrator role', '取消管理员身份') : t('Make administrator', '设为管理员') }] : []),
@@ -140,6 +145,7 @@ function Accounts({ console: { overview, reload } }: { console: Console }) {
     ];
     function choose(action: string) {
       if (action === 'delete') return setDeleting(entry.id);
+      if (action === 'set-password') return setSettingPassword({ id: entry.id, email: entry.email });
       if (action === 'status') {
         return act(entry.id, async () => {
           await call(path(entry.id, 'status'), { status: entry.enabled ? 'disabled' : 'enabled' });
@@ -216,6 +222,34 @@ function Accounts({ console: { overview, reload } }: { console: Console }) {
     {link && <Secret title={t(`Password reset link for ${link.email}`, `${link.email} 的密码重置链接`)}
       note={t('Send it to the account holder. It works once, for 24 hours, and is shown only now.', '请把它交给账号持有人。链接 24 小时内有效，只能使用一次，且只在此处显示一次。')}
       onDone={() => setLink(undefined)} values={[{ label: t('Reset link', '重置链接'), value: link.link, name: 'reset-link' }]} />}
+    {settingPassword && <Panel title={t(`Set password for ${settingPassword.email}`, `为 ${settingPassword.email} 设置密码`)}>
+      <TaskFeedback task={passwordTask} />
+      <Form className="flex max-w-md flex-wrap items-end gap-3" validationBehavior="native" onSubmit={event => {
+        const password = readForm(event)('password');
+        setPasswordError(undefined);
+        void passwordTask.run('set-pw', async () => {
+          try {
+            await call(`/admin/api/accounts/${encodeURIComponent(settingPassword.id)}/set-password`, { password });
+            setSettingPassword(undefined);
+            return t('Password has been set.', '密码已设置。');
+          } catch (failure) {
+            const code = codeOf(failure);
+            if (code === 'invalid_password' || code === 'common_password') { setPasswordError(problem(failure, language)); return; }
+            throw failure;
+          }
+        });
+      }}>
+        <TextField name="password" type="password" autoComplete="new-password" isRequired isInvalid={Boolean(passwordError)}
+          onChange={() => setPasswordError(undefined)} className="min-w-0 flex-1 basis-48">
+          <Label>{t('New password', '新密码')}</Label><Input className="w-full min-w-0" />
+        </TextField>
+        {passwordError && <p role="alert" className="text-sm text-danger">{passwordError}</p>}
+        <div className="flex gap-2">
+          <Button type="submit" isPending={passwordTask.pending === 'set-pw'}>{t('Set password', '设置密码')}</Button>
+          <Button variant="tertiary" onPress={() => setSettingPassword(undefined)}>{t('Cancel', '取消')}</Button>
+        </div>
+      </Form>
+    </Panel>}
     <Loaded source={list}>{({ accounts }) => {
       const requested = accounts.filter(entry => entry.deletionRequestedAt);
       const others = accounts.filter(entry => !entry.deletionRequestedAt);
@@ -369,6 +403,7 @@ const actions: Record<string, [string, string]> = {
   'account.deleted': ['Account deleted', '删除账号'], 'account.deletion_requested': ['Deletion requested', '申请删除账号'],
   'account.deletion_withdrawn': ['Deletion request withdrawn', '撤回删除申请'], 'account.email_verified': ['Email verified', '验证邮箱'],
   'account.email_verified_by_operator': ['Email marked as verified', '标记邮箱为已验证'], 'account.password_reset': ['Password reset', '重置密码'],
+  'account.password_set_by_operator': ['Password set by administrator', '管理员设置密码'],
   'account.recovery_requested': ['Password reset requested', '请求重置密码'], 'account.reset_link_issued': ['Reset link created', '生成重置链接'],
   'account.second_factor_enabled': ['Two-step verification turned on', '开启两步验证'], 'account.second_factor_removed': ['Two-step verification turned off', '关闭两步验证'],
   'account.session_revoked': ['Session ended', '结束会话'], 'account.sessions_ended': ['Signed out of all devices', '退出所有设备'],
