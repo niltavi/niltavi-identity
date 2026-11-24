@@ -1,0 +1,9 @@
+{
+  "extends": "../preview/tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@gravity-ui/icons": ["./src/header-icons.ts"]
+    }
+  },
+  "include": ["src", "vendor/niltavi-ui/product", "vite.config.ts", "prerender.tsx"]
+}
