@@ -1,6 +1,12 @@
 @import "../vendor/niltavi-ui/theme/index.css";
 @source "./main.tsx";
 @source "./site.tsx";
+@source "./ui.tsx";
+@source "./protocol.tsx";
+@source "./auth.tsx";
+@source "./setup.tsx";
+@source "./workspace.tsx";
+@source "./admin.tsx";
 @source "../vendor/niltavi-ui/product";
 
 @theme {

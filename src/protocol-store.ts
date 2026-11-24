@@ -20,7 +20,10 @@ function storageKey(id: string) {
   return createHash('sha256').update(id).digest('hex');
 }
 
-export function createProtocolStore(pool: Pool, realm?: string) {
+export type ClientLookup = (id: string) => Promise<AdapterPayload | undefined>;
+export type CentralSession = { key: string; signedInAt: Date | null; expiresAt: Date | null; apps: Array<{ id: string; sid: string }> };
+
+export function createProtocolStore(pool: Pool, realm?: string, clients?: ClientLookup) {
   const requests = new AsyncLocalStorage<Map<string, number>>();
   const prefix = realm ? `${storageKey(realm)}:` : '';
 
@@ -35,10 +38,13 @@ export function createProtocolStore(pool: Pool, realm?: string) {
   class PostgresAdapter implements Adapter {
     private readonly model: string;
     private readonly replayDetection: boolean;
+    private readonly registry: boolean;
 
     constructor(model: string) {
       this.model = `${prefix}${model}`;
       this.replayDetection = model === 'ReplayDetection';
+      // Registered applications live in their own table, so a new registration works without a restart.
+      this.registry = model === 'Client';
     }
 
     async upsert(id: string, payload: AdapterPayload, expiresIn?: number) {
@@ -71,6 +77,7 @@ export function createProtocolStore(pool: Pool, realm?: string) {
     }
 
     find(id: string) {
+      if (this.registry) return clients?.(id) ?? Promise.resolve(undefined);
       return this.read('r.storage_key', storageKey(id));
     }
 
@@ -126,8 +133,54 @@ export function createProtocolStore(pool: Pool, realm?: string) {
     return account !== undefined && remember(id, account.security_epoch);
   }
 
+  const live = `(r.expires_at IS NULL OR r.expires_at > clock_timestamp()) AND a.enabled AND a.security_epoch = r.account_epoch`;
+  const sessionModel = `${prefix}Session`;
+
+  // A central session is the browser's sign-in at Identity. Each application it opened holds its own sid.
+  async function sessions(account: string): Promise<CentralSession[]> {
+    const result = await pool.query<{ storage_key: string; payload: AdapterPayload; expires_at: Date | null }>(
+      `SELECT r.storage_key, r.payload, r.expires_at FROM oidc_records r JOIN accounts a ON a.id = r.account_id
+       WHERE r.model = $1 AND r.account_id = $2 AND ${live} ORDER BY r.payload ->> 'loginTs' DESC`, [sessionModel, account]);
+    return result.rows.map(({ storage_key: key, payload, expires_at: expiresAt }) => ({
+      key, expiresAt,
+      signedInAt: typeof payload.loginTs === 'number' ? new Date(payload.loginTs * 1_000) : null,
+      apps: Object.entries((payload.authorizations ?? {}) as Record<string, { sid?: string }>)
+        .flatMap(([id, entry]) => entry.sid ? [{ id, sid: entry.sid }] : []),
+    }));
+  }
+
+  async function sessionActive(account: string, client: string, sid: string) {
+    return Boolean((await pool.query(
+      `SELECT 1 FROM oidc_records r JOIN accounts a ON a.id = r.account_id
+       WHERE r.model = $1 AND r.account_id = $2 AND ${live} AND r.payload -> 'authorizations' -> $3 ->> 'sid' = $4`,
+      [sessionModel, account, client, sid])).rowCount);
+  }
+
+  // Ends one central session and everything issued under it. Returns the applications to notify.
+  async function endSession(account: string, key: string) {
+    const removed = (await pool.query<{ payload: AdapterPayload }>(
+      'DELETE FROM oidc_records WHERE model = $1 AND account_id = $2 AND storage_key = $3 RETURNING payload',
+      [sessionModel, account, key])).rows[0];
+    if (!removed) return undefined;
+    const entries = Object.entries((removed.payload.authorizations ?? {}) as Record<string, { sid?: string; grantId?: string }>);
+    const grants = entries.flatMap(([, entry]) => entry.grantId ? [entry.grantId] : []);
+    if (grants.length) {
+      await pool.query(`DELETE FROM oidc_records WHERE account_id = $1 AND starts_with(model, $3)
+        AND (payload ->> 'grantId' = ANY($2::text[]) OR payload ->> 'jti' = ANY($2::text[]))`, [account, grants, prefix]);
+    }
+    return entries.flatMap(([id, entry]) => entry.sid ? [{ id, sid: entry.sid }] : []);
+  }
+
+  // The client an authorization request named, read even after the request has expired.
+  async function interactionClient(uid: string) {
+    return (await pool.query<{ client: string | null }>(
+      "SELECT payload -> 'params' ->> 'client_id' AS client FROM oidc_records WHERE model = $1 AND storage_key = $2",
+      [`${prefix}Interaction`, storageKey(uid)])).rows[0]?.client ?? undefined;
+  }
+
   return {
     Adapter: PostgresAdapter,
+    sessions, sessionActive, endSession, interactionClient,
     isEnabled,
     remember,
     request<T>(work: () => T) { return requests.run(new Map(), work); },

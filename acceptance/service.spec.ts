@@ -169,8 +169,8 @@ test('provisioned accounts and clients survive restart with real OIDC, revocatio
       writeFile(passwordPath, pass, { mode: 0o600 }),
     ]);
     await test.step('Provision through the operator CLI and reject repeats/invalid registration', async () => {
-      await expect(cli('migrate')).resolves.toEqual({ version: 4, changed: true });
-      await expect(cli('migrate')).resolves.toEqual({ version: 4, changed: false });
+      await expect(cli('migrate')).resolves.toEqual({ version: 5, changed: true });
+      await expect(cli('migrate')).resolves.toEqual({ version: 5, changed: false });
       await cli('keys', 'init');
       await expect(cli('keys', 'init')).rejects.toThrow('already exists');
       accountId = (await cli<{ id: string }>('account', 'create', email)).id;
@@ -201,7 +201,7 @@ test('provisioned accounts and clients survive restart with real OIDC, revocatio
       expect(new URL(page.url()).searchParams.get('error')).toBe('invalid_request');
       await authorize(page, a);
       await credentials(page, email, 'wrong test password');
-      await expect(page.getByText('Credentials were not accepted.')).toBeVisible();
+      await expect(page.getByRole('alert')).toContainText('The email or password is incorrect.');
       await credentials(page, email, pass);
       await expectLogin(page, a);
       const token = await serverSession(page, a);
@@ -276,7 +276,7 @@ test('provisioned accounts and clients survive restart with real OIDC, revocatio
       await expect(b.exchange(pending.redirect, pending.flow)).rejects.toMatchObject({ error: 'invalid_grant' });
       await authorize(page, a);
       await credentials(page, email, pass);
-      await expect(page.getByText('Credentials were not accepted.')).toBeVisible();
+      await expect(page.getByRole('alert')).toContainText('The email or password is incorrect.');
       expect(await cli('account', 'enable', email)).toMatchObject({ enabled: true, changed: true });
       expect((await a.introspect(old.accessToken)).active).toBe(false);
       await credentials(page, email, pass);
@@ -291,22 +291,25 @@ test('provisioned accounts and clients survive restart with real OIDC, revocatio
       expect(await profileStatus(other)).toBe(401);
       await authorize(page, a);
       await credentials(page, email, pass);
-      await expect(page.getByText('Credentials were not accepted.')).toBeVisible();
+      await expect(page.getByRole('alert')).toContainText('The email or password is incorrect.');
       await credentials(page, email, newPass);
       await expectLogin(page, a);
       await authorize(other, b);
       await expectLogin(other, b);
       const events = await cli<Array<{ action: string }>>('audit', 'list');
-      expect(events.map((event) => event.action)).toEqual([
+      // Sign-ins and failed sign-ins are audited too. The operator actions keep their order.
+      const signIns = ['account.signed_in', 'account.sign_in_failed'];
+      expect(events.map((event) => event.action).filter((action) => !signIns.includes(action))).toEqual([
         'account.created', 'application.registered', 'application.registered', 'account.disabled', 'account.enabled', 'account.password_reset',
       ]);
+      expect(events.map((event) => event.action)).toEqual(expect.arrayContaining(signIns));
     });
 
     await test.step('Perform healthy global logout and verify that both apps deny access in five seconds', async () => {
       await page.goto(aSpec.origin);
       await page.getByRole('button', { name: 'Sign out of all apps' }).click();
       const started = performance.now();
-      await page.getByRole('button', { name: 'End session' }).click();
+      await page.getByRole('button', { name: 'Sign out', exact: true }).click();
       await expect(page.getByRole('link', { name: 'Sign in' })).toBeVisible();
       expect(await profileStatus(page)).toBe(401);
       expect(await profileStatus(other)).toBe(401);
@@ -323,7 +326,7 @@ test('provisioned accounts and clients survive restart with real OIDC, revocatio
       const prior = await serverSession(other, b);
       b.setLogoutReceiverAvailable(false);
       await page.getByRole('button', { name: 'Sign out of all apps' }).click();
-      await page.getByRole('button', { name: 'End session' }).click();
+      await page.getByRole('button', { name: 'Sign out', exact: true }).click();
       await expect(page.getByRole('link', { name: 'Sign in' })).toBeVisible();
       expect((await b.introspect(prior.accessToken)).active).toBe(false);
       expect(await profileStatus(other)).toBe(401);
@@ -357,6 +360,7 @@ test('provisioned accounts and clients survive restart with real OIDC, revocatio
       expect(decodeProtectedHeader((await serverSession(other, b)).idToken).kid).toBe(pending.kid);
     });
   } finally {
+    await context.close().catch(() => undefined);
     await stop();
     await Promise.allSettled(rps.map((rp) => rp.app.close()));
     setGlobalDispatcher(previousDispatcher);

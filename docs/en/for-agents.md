@@ -20,7 +20,27 @@ docker compose -p niltavi-identity -f compose.service.yaml up -d --wait
 
 Compose waits for PostgreSQL and applies the schema migrations before starting Identity. Back up PostgreSQL and the protected signing and encryption material. Test restoration on an isolated stack before relying on the backup.
 
-For email registration, keep the SMTP connection URL in a protected file and set `IDENTITY_SMTP_URL_FILE` to its in-container path, such as `/run/identity/smtp.url`. Set `IDENTITY_SMTP_FROM` to the authorized sender. Enable `IDENTITY_DEPLOYMENT_PROFILE=hosted` only on Niltavi's approved HTTPS domains. The default `self-hosted` profile supports your own HTTPS domain. Both profiles accept personal and work addresses that can be verified. Without SMTP, existing users and accounts created by an operator can still sign in. See the [browser and OIDC contract](authentication.md) for the separate acceptance profile.
+## Initialize the instance
+
+Print a one-time setup link and give it to the instance owner. The link is valid for one hour.
+
+```sh
+docker compose -p niltavi-identity -f compose.service.yaml exec -T identity node dist/cli.js setup link
+```
+
+The owner opens the link, creates the first administrator account, and configures outgoing mail in the browser. The owner types the SMTP settings personally and confirms them with the code from a test message. Do not fill in or store mail credentials on the owner's behalf. The owner may skip the mail step. The instance then runs without outgoing mail: registration does not verify addresses, and an administrator issues password reset links. See the [contract](authentication.md#without-outgoing-mail).
+
+After setup the owner enables a second factor under **Account → Security**. The instance console at `/admin` is read-only until then.
+
+For an unattended install, create the owner from the command line. Pass the password over stdin from a file protected by the operator.
+
+```sh
+docker compose -p niltavi-identity -f compose.service.yaml exec -T identity \
+  node dist/cli.js account create "$OWNER_EMAIL" < "$OWNER_PASSWORD_FILE"
+docker compose -p niltavi-identity -f compose.service.yaml exec -T identity node dist/cli.js admin grant "$OWNER_EMAIL"
+```
+
+`IDENTITY_SMTP_URL_FILE` with `IDENTITY_SMTP_FROM` remains available for deployments that manage the mail transport outside the instance, and takes precedence over the settings saved in the browser. Enable `IDENTITY_DEPLOYMENT_PROFILE=hosted` only on Niltavi's approved HTTPS domains.
 
 ## Verify the instance
 
@@ -28,22 +48,21 @@ For email registration, keep the SMTP connection URL in a protected file and set
 curl --fail --silent --show-error "$IDENTITY_ISSUER/.well-known/openid-configuration"
 ```
 
-The Discovery response should list the exact issuer, `S256`, and the JWKS URL. In a fresh browser with standard certificate validation, open the public home page, visit `/register`, register a disposable mailbox you control, and verify the address. Sign in at `/login`, confirm the current session, and sign out. If SMTP is unavailable, provision a test account through the operator CLI. Pass the password over stdin from a file protected by the operator.
+The Discovery response should list the exact issuer, `S256`, the JWKS URL, and `code` as the only response type. In a fresh browser with standard certificate validation, open the public home page, register at `/register`, sign in at `/login`, open the account center, and sign out. With outgoing mail configured, also request a password reset at `/recover` and complete it from the mailed link.
 
-```sh
-docker compose -p niltavi-identity -f compose.service.yaml exec -T identity \
-  node dist/cli.js account create "$ACCOUNT_EMAIL" < "$ACCOUNT_PASSWORD_FILE"
-```
+## Run it on a workstation
+
+`npm ci && npm run local` starts PostgreSQL and a mail catcher in Docker, Identity on `https://identity.localhost:36100`, and two copies of the example application. Open `http://localhost:36109/` for the links, the one-time setup link, and the command that trusts the local certificate authority. `node scripts/local.mjs stop` removes the containers and keeps the data.
 
 ## Connect an application
 
-Supply each first-party server-side application's exact HTTPS callback, post-logout redirect, back-channel logout receiver, and resource URL. The registration response contains the client secret. Capture it privately and store it with the application's other server secrets.
+Register each application once with its ID, display name and home URL. The response contains the application credentials. Capture them privately and store them with the application's other server secrets. An administrator can do the same in the instance console. A registration takes effect immediately.
 
 ```sh
 (umask 077; docker compose -p niltavi-identity -f compose.service.yaml exec -T identity \
-  node dist/cli.js application register "$CLIENT_ID" "$CALLBACK" "$SIGNED_OUT" \
-  "$BACK_CHANNEL" "$RESOURCE" > "$CLIENT_CONFIGURATION_FILE")
-docker compose -p niltavi-identity -f compose.service.yaml restart identity
+  node dist/cli.js application register "$APP_ID" "$APP_NAME" "$APP_HOME_URL" > "$APP_CREDENTIALS_FILE")
 ```
 
-Configure OIDC Discovery, Authorization Code with PKCE (`S256`), and `client_secret_basic`. Request `openid` and the registered resource's `read` scope. Request `email` when needed and retrieve the authorized email claims from UserInfo. Verify sign-in in each connected app, central session reuse, and signed back-channel logout on both sites. See the [service acceptance runbook](../service-acceptance.md) for more checks and key rotation.
+The application serves `/auth/callback`, `/auth/signed-out` and `/auth/notifications` on the home URL's origin. The Node SDK provides all three. Follow the [integration guide](integration.md) to add sign-in, team roles and Agent tokens, then run its self-test. `application rotate-secret <id>` issues new credentials, and `application disable <id>` turns an application away.
+
+See the [contract](authentication.md) for what Identity guarantees and the [service acceptance runbook](../service-acceptance.md) for the checks and key rotation.

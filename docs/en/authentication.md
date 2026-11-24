@@ -1,37 +1,103 @@
-# Identity integration
+# Identity contract
 
-## Independent applications
+This page states what Identity guarantees to people, to applications, and to operators. To connect an application, start with the [integration guide](integration.md). It uses the Node SDK, which implements everything below.
 
-Discover the provider at the configured HTTPS issuer's `/.well-known/openid-configuration`. The shared test issuer is `https://identity.testenv.niltavi.com`. A registered first-party application uses Authorization Code with S256 PKCE, exact registered redirect URIs, `state` and `nonce`, and `client_secret_basic` on the server. Validate the issuer, audience, signature, nonce, and time claims. Link the application's account to the pair `(issuer, sub)` and establish a separate session on the application's own domain.
+## Accounts and passwords
 
-Request `openid` to identify the account. In this revision, request `openid email` without a resource indicator if the application needs the address and verification state from UserInfo. Use the discovered endpoint with the bearer token and require UserInfo's `sub` to match the validated ID token. Treat `email_verified: false` as an unverified address. Linking an existing workspace or role requires its own authorized account-linking flow. The email address alone gives no authority to take over an existing application account.
+An account is an email address and a password. Every account owns a personal space and can belong to any number of teams.
 
-Identity operators need the client ID and the exact HTTPS callback, post-logout redirect, back-channel logout URL, and resource URL. The registration command and secret handling are in [For Agents](for-agents.md#connect-an-application). Keep the client secret in the requesting application's protected server-side store. Register distinct clients for distinct applications and environments.
+One password rule applies everywhere: 12 to 256 characters counted by character, no composition requirement, and no password from the list of commonly breached ones. Pasting and password managers work. Applications never see or store passwords and must not add a rule of their own.
 
-The issuer's own pages are `/login`, `/register` and `/workspace`, with equivalent `/zh/*` paths. An OIDC login interaction links to registration. After signup the user can return to the requesting app to start a new authorization request. The account workspace and the provider interaction use separate sessions. Apps should initiate OIDC at their own login entry and keep the authorization flow in the browser.
+An application identifies an account by the pair `(issuer, sub)`. The email address is a contact detail. It must not be used as a key, and two records with the same address must not be merged because of it.
 
-## Identity's first-party browser API
+An address is verified by a code or a link mailed to it, or by an instance administrator. An unverified account can sign in and use its personal space. It cannot accept a team invitation and cannot recover its password by mail.
 
-These endpoints serve the issuer's own browser UI. State-changing requests require `Content-Type: application/json` and a browser `Origin` that exactly matches the issuer. The issuer does not share its cookies with sibling domains and there is no cross-origin credential API.
+## Signing in through an application
 
-| Request | Required JSON | Success |
+Identity is an OpenID Connect provider. Discover it at `/.well-known/openid-configuration` on the issuer.
+
+- Authorization code with S256 PKCE is the only flow. The redirect address must equal the registered one exactly.
+- Registered applications authenticate with `client_secret_basic`.
+- Scopes: `openid`, `email` (`email`, `email_verified`), `profile` (`name`, `locale`), `orgs`. The claims are in the ID token and in UserInfo.
+- `orgs` lists the account's teams as `{ org_id, name, role, personal }`. `role` is `owner`, `admin` or `member`. The personal space is the entry with `personal: true`.
+- `ui_locales` chooses the language of the sign-in page (`en` or `zh-CN`). Without it the page follows the browser.
+- `prompt=create` opens registration directly.
+
+The sign-in page names the application that asked. After sign-in or registration the browser returns straight to the application's callback. A browser that already has a session at Identity returns without any input. A page that says the request expired, with a button back to the application, appears only when the request can no longer be completed.
+
+Which page the user came from is the application's own business. Keep it on the application side and accept only a same-origin relative path.
+
+## Teams
+
+Team roles are owner, admin and member. Owners and admins invite and remove members. Owners change roles. A team always keeps at least one owner: the last owner cannot be removed, demoted or leave.
+
+An invitation names one address and one role, lasts seven days and is accepted once. Identity mails it when outgoing mail is configured and always shows the link to the inviter. Accepting requires being signed in with that address, verified.
+
+Every member of a team can enter every application registered on the instance. What a member may do inside an application is that application's decision.
+
+## Sessions and sign-out
+
+A browser can hold a central session at Identity and one session in each application it opened. Sign-out has three scopes, and interfaces must label them distinctly.
+
+| Scope | What ends | How |
 | --- | --- | --- |
-| `GET /account/config` | None | `200` with `registrationAvailable`, `managedAccounts`, `applications` and, in acceptance mode, an optional `registrationDomain` |
-| `POST /account/register` | `{ "email": "...", "password": "..." }` | `202 { "accepted": true }` and a 15-minute enrollment cookie |
-| `POST /account/verify` | `{ "email": "...", "code": "..." }` | `201 { "created": true }` and clears the enrollment cookie |
-| `POST /account/login` | `{ "email": "...", "password": "..." }` | `204` and a session cookie |
-| `GET /account/session` | None | `200 { "account": { ... } }`, with ID, email, verification state, timestamps and active session count |
-| `POST /account/logout` | `{}` | `204` and clears the current session cookie |
-| `POST /account/end-sessions` | `{}` | `204` and invalidates the account's sessions and Identity grants |
+| This application | The application's own session | The application clears it. This is what a plain “Sign out” button does. |
+| All Niltavi apps in this browser | The central session and every application session it opened | RP-initiated logout at the `end_session_endpoint` |
+| All devices | Every session of the account, everywhere | The account center, or `POST /account/end-sessions` |
 
-On registration, submit only the email and password. The password has a minimum length of 15 characters and a maximum size of 1024 bytes. Identity stores an Argon2id hash in the pending enrollment. Read the mailed verification code and submit it in the same browser and origin within 15 minutes. The random enrollment cookie is bound to the pending password, email, and code on the server. Verification consumes the enrollment once and creates the account with a verified address. Sign in with the password after verification. Requests to an already registered address also return `202`.
+The account center lists the active sessions and ends them one at a time.
 
-Both enrollment and session cookies have `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/` and no `Domain` attribute. The session has a 12-hour lifetime. Invalid input or an invalid verification attempt returns `400` with an error code. CSRF mismatches return `403 unexpected_origin`, non-JSON state-changing requests return `415 json_required`, invalid credentials or missing sessions return `401`, and throttling returns `429 try_later`. SMTP availability and delivery failures return `503`. Treat `202` as a receipt to continue verification. It creates no active account or application session.
+## What Identity tells applications
+
+Applications register three addresses on their own origin: `/auth/callback`, `/auth/signed-out` and `/auth/notifications`.
+
+Identity posts a signed notification to `/auth/notifications` when a session ends, when an account is disabled, deleted or signed out everywhere, and when a team membership or role changes. The body is `logout_token=<JWT>`, signed with the issuer's key, with `aud` set to the application. Its `events` claim holds `http://schemas.openid.net/event/backchannel-logout` or `https://niltavi.com/events/membership-changed`. A logout token without `sid` covers every session of `sub`.
+
+Delivery is best effort. The guarantee comes from the application's own check:
+
+- Every 60 seconds an application confirms each session with `POST /apps/session`. The answer says whether the session is still valid and returns the account's current teams.
+- If Identity cannot be reached, an established session may continue for at most 5 minutes after its last successful check. After that the application refuses access and says the sign-in service is temporarily unavailable.
+
+So a removal, a disabled account or a sign-out takes effect in every application within 60 seconds even when the notification is lost, and within 5 minutes when the application is cut off from Identity.
+
+## Application endpoints
+
+These are called by an application's server with HTTP Basic authentication, using the application ID and secret. Request bodies are JSON with exactly the listed keys.
+
+| Request | Body | Answer |
+| --- | --- | --- |
+| `GET /apps/self` | | The registration: `app_id`, `name`, `issuer`, `home_url`, `callback`, `post_logout`, `notifications` |
+| `POST /apps/session` | `sub`, `sid` | `{ active: false }`, or `{ active: true, account, orgs }` |
+| `POST /apps/agent-token` | `token` | `{ active: false }`, or `{ active: true, token_id, account, org }` |
+| `POST /apps/service-token` | `audience` | `{ access_token, token_type, expires_in }` |
+
+**Agent access tokens** let a person's MCP client or command line act as that person in one application and one team. The person creates one in the account center, optionally with an expiry, sees it once, and can revoke it at any time. It stops working when it is revoked or expires, when the account is disabled, and when the person leaves the team.
+
+**Service tokens** are how one Niltavi service proves itself to another. An application exchanges its credentials for a JWT that names it in `client_id`, is addressed to one other application in `aud`, and expires after 5 minutes. The receiver verifies the signature against the issuer's JWKS and checks `iss`, `aud` and `exp`.
+
+## Without outgoing mail
+
+Outgoing mail is configured by the instance owner during first-run setup, or later in the instance console. The settings are saved only after the owner enters the code from a real test message. Setup can skip the step.
+
+Without outgoing mail:
+
+- Registration creates the account at once, unverified. Because the page has to say whether it worked, it also reveals that an address is already registered. With outgoing mail, registration answers identically for new and existing addresses.
+- An administrator recovers an account by issuing a one-time reset link, in the console or with `identity account reset-link <email>`.
+- An administrator verifies an address in the console or with `identity account verify-email <email>`.
+- The console shows a standing notice that outgoing mail is not configured.
+
+## Instance administrators
+
+The first-run setup creates the instance owner. Administrators register applications, manage accounts and change instance settings in the console at `/admin`.
+
+An administrator can read the console after signing in. Any change requires a second factor (TOTP) that is enabled on the account and confirmed for the current session. Without it the console is read-only.
+
+Signing keys rotate with an overlap: `identity keys stage` publishes the next key, `identity keys activate <kid>` makes it sign, and the previous key stays published until `identity keys retire <kid>`. Restart the service after each step.
+
+The audit trail records sign-ins and failed sign-ins, password resets, membership changes, application registrations, and the issue and revocation of tokens. Passwords, codes, tokens and request parameters are never written to the audit trail or the log.
 
 ## Deployment profiles
 
-- `hosted` requires HTTPS issuers on `niltavi.com` or one of its subdomains. Configure the authorized SMTP transport and sender to open registrations to users who can verify their addresses.
-- `self-hosted` is the default profile for operators using their own HTTPS domains. Registration requires SMTP. Membership and workspace permissions are granted independently of email domain.
-- `acceptance` enables optional enrollment on a scoped test mailbox domain and scoped account operators. The Mailpit Compose overlay supports controlled test mailboxes. It provides evidence for the server transaction and verification flow. External delivery must be verified with approved real personal and work recipients before hosted launch.
-
-When upgrading from the previous enrollment contract, an unverified request initiated before migration must be started again. Existing accounts, sessions, and OIDC clients keep their records.
+- `self-hosted` is the default. The operator chooses whether registration is open or by invitation only.
+- `hosted` requires HTTPS issuers on `niltavi.com` or one of its subdomains, sends verification codes through Tencent SES, and starts as invitation only.
+- `acceptance` enables scoped test mailbox domains and scoped account operators for isolated test runs.

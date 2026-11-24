@@ -7,29 +7,57 @@ import { join } from 'node:path';
 import Fastify from 'fastify';
 import type { FastifyReply, FastifyRequest, FastifyServerFactory } from 'fastify';
 import Provider, { errors, interactionPolicy } from 'oidc-provider';
-import type { ClientMetadata, Configuration } from 'oidc-provider';
+import type { AdapterPayload, Configuration } from 'oidc-provider';
 import { Agent } from 'undici';
 import type { Pool } from 'pg';
+import { registerAdmin } from './admin-api.js';
+import { registerApplicationApi } from './apps-api.js';
 import { registerBrowserAuth, testenvSignupAllowed } from './browser-auth.js';
 import { protocolPageCsp, registerBrowserPage } from './browser-page.js';
-import { assertSchema, getLogin, listApplications, loginRateAllowed } from './database.js';
+import type { ProtocolOptions, ProtocolView } from './browser-page.js';
+import { assertSchema, audit, getLogin, loginRateAllowed, transaction } from './database.js';
+import type { Application } from './database.js';
 import { normalizeEmail, openClientSecret, passwordHash, verifyPassword } from './credentials.js';
+import { createMailer } from './mail.js';
+import { createNotifier } from './notify.js';
 import { createProtocolStore } from './protocol-store.js';
+import { registerSetup } from './setup.js';
+import { orgsFor, registerTeams } from './teams.js';
+import { createWebSessions } from './web-session.js';
 import { beginRegistrationIntent, intentDigest, oidcInteractionSeconds, validInteractionUid } from './registration-intent.js';
 import { httpsUrl, loadKeyRing, loadSecretEncryptionKey, required, secretDirectory } from './settings.js';
 import { identityTls, watchTls } from './tls.js';
 import type { IdentityTls } from './tls.js';
 
-function page(title: string, markup: string, language: 'en' | 'zh-CN' = 'en') {
-  return `<!doctype html><html lang="${language}"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>
-  <main><h1>${title}</h1>${markup}</main></html>`;
+type Language = 'en' | 'zh-CN';
+const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+
+function page(title: string, markup: string, language: Language = 'en') {
+  return `<!doctype html><html lang="${language}"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title>
+  <main><h1>${escape(title)}</h1>${markup}</main></html>`;
 }
 
-function loginForm(error = false, registration?: string) {
-  return page('Sign in to Niltavi Identity', `${error ? '<p>Credentials were not accepted.</p>' : ''}
-    <form method="post"><p><label>Email <input type="email" name="email" required autocomplete="username"></label></p>
-    <p><label>Password <input type="password" name="password" required autocomplete="current-password"></label></p>
-    <button type="submit">Sign in</button></form>${registration ? '<a href="' + registration + '">Register by email</a>' : ''}`);
+// Plain pages for a build without the browser bundle. They carry the same facts as the shared UI.
+function plainPage(view: ProtocolView, { invalid, form, registration, recover, language = 'en', appName, appUrl }: ProtocolOptions) {
+  const text = (en: string, zh: string) => language === 'en' ? en : zh;
+  const app = appName ? escape(appName) : undefined;
+  if (view === 'login') {
+    return page(app ? text(`Sign in to continue to ${appName}`, `登录以继续使用 ${appName}`) : text('Sign in to Niltavi Identity', '登录 Niltavi Identity'),
+      `${invalid ? `<p>${text('Credentials were not accepted.', '邮箱或密码不正确。')}</p>` : ''}
+      <form method="post"><p><label>${text('Email', '邮箱')} <input type="email" name="email" required autocomplete="username"></label></p>
+      <p><label>${text('Password', '密码')} <input type="password" name="password" required autocomplete="current-password"></label></p>
+      <button type="submit">${text('Sign in', '登录')}</button></form>
+      ${registration ? `<a href="${registration}">${text('Create an account', '创建账号')}</a>` : ''}
+      ${recover ? `<a href="${recover}">${text('Forgot password', '忘记密码')}</a>` : ''}`, language);
+  }
+  if (view === 'logout') {
+    return page(text('Sign out of all Niltavi apps in this browser', '退出这个浏览器上的所有 Niltavi 应用'), `${form ?? ''}
+      <button type="submit" form="op.logoutForm" name="logout" value="yes">${text('Sign out', '退出')}</button>`, language);
+  }
+  if (view === 'signed-out') return page(text('Signed out', '已退出'), '', language);
+  return page(text('This sign-in request has expired', '登录请求已过期'),
+    `<p>${text('Start again from the application.', '请回到应用重新发起登录。')}</p>` +
+    (app && appUrl ? `<a href="${escape(appUrl)}">${text(`Return to ${app}`, `返回 ${app}`)}</a>` : ''), language);
 }
 
 export async function service(pool: Pool) {
@@ -78,46 +106,82 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
   route: (request: IncomingMessage, response: ServerResponse) => void;
 }, canonical?: URL) {
   const directory = secretDirectory();
-  const [ring, encryptionKey, cookieKey, applications, backupHash] = await Promise.all([
+  const [ring, encryptionKey, cookieKey, backupHash] = await Promise.all([
     loadKeyRing(directory),
     loadSecretEncryptionKey(directory),
     readFile(join(directory, 'cookies.key'), 'utf8'),
-    listApplications(pool),
     passwordHash('unused password for timing comparison'),
   ]);
   if (Buffer.from(cookieKey.trim(), 'base64url').length < 32) throw new Error('The cookie signing key is too short.');
+  const signing = ring.keys[0];
+  if (!signing) throw new Error('The signing key ring is invalid.');
+
+  // Applications are read from the registry on demand, so registering, disabling or
+  // rotating one takes effect within seconds and needs no restart.
+  const registry = new Map<string, { at: number; value: Application | undefined }>();
+  async function registered(id: string) {
+    const cached = registry.get(id);
+    if (cached && Date.now() - cached.at < 3_000) return cached.value;
+    const value = (await pool.query<Application>('SELECT * FROM applications WHERE id = $1 AND enabled', [id])).rows[0];
+    registry.set(id, { at: Date.now(), value });
+    return value;
+  }
+  async function client(id: string): Promise<AdapterPayload | undefined> {
+    const entry = await registered(id);
+    return entry && {
+      client_id: entry.id,
+      client_name: entry.name,
+      client_secret: openClientSecret(entry.id, entry.secret_ciphertext, encryptionKey),
+      token_endpoint_auth_method: 'client_secret_basic',
+      response_types: ['code'],
+      grant_types: ['authorization_code', 'refresh_token'],
+      redirect_uris: [entry.callback],
+      post_logout_redirect_uris: [entry.post_logout],
+      backchannel_logout_uri: entry.backchannel_logout,
+      backchannel_logout_session_required: true,
+    };
+  }
+  const loopbackReceiver = async (url: string) => new URL(url).hostname.endsWith('.localhost') &&
+    Boolean((await pool.query('SELECT 1 FROM applications WHERE backchannel_logout = $1 AND enabled', [url])).rowCount);
 
   let protocolUi: Awaited<ReturnType<typeof registerBrowserPage>>;
-  const signup = !canonical && (testenvSignupAllowed(issuer) || Boolean(process.env.IDENTITY_TENCENT_SES_CONFIG_FILE) ||
-    process.env.IDENTITY_DEPLOYMENT_PROFILE !== 'hosted' && Boolean(process.env.IDENTITY_SMTP_URL_FILE));
-  const loginPage = (invalid = false, uid?: string) => {
-    const registration = signup && uid && validInteractionUid(uid) ? '/interaction/' + uid + '/register' : undefined;
-    return protocolUi?.('login', invalid, undefined, registration) ?? loginForm(invalid, protocolUi ? registration : undefined);
-  };
-  function sendLogin(reply: FastifyReply, status = 200, uid?: string) {
+  const registrationEnabled = !canonical;
+  const render = (view: ProtocolView, options: ProtocolOptions = {}) => protocolUi?.(view, options) ?? plainPage(view, options);
+  const preferred = (request: FastifyRequest, requested?: unknown): Language =>
+    (typeof requested === 'string' && requested.trim() ? requested : request.headers['accept-language'] ?? '')
+      .trim().toLowerCase().startsWith('zh') ? 'zh-CN' : 'en';
+  const localPath = (language: Language, path: string) => (language === 'zh-CN' ? '/zh' : '') + path;
+
+  type Details = { uid: string; params: Record<string, unknown> };
+  async function loginOptions(request: FastifyRequest, details: Details): Promise<ProtocolOptions> {
+    const language = preferred(request, details.params.ui_locales);
+    const requester = typeof details.params.client_id === 'string' ? await registered(details.params.client_id) : undefined;
+    return {
+      language, appName: requester?.name, appUrl: requester?.home_url, recover: localPath(language, '/recover'),
+      registration: registrationEnabled && validInteractionUid(details.uid) ? '/interaction/' + details.uid + '/register' : undefined,
+    };
+  }
+  async function sendLogin(request: FastifyRequest, reply: FastifyReply, details: Details, status = 200) {
     if (protocolUi) reply.header('content-security-policy', protocolPageCsp);
-    return reply.code(status).type('text/html').send(loginPage(status !== 200, uid));
+    return reply.code(status).type('text/html').send(render('login', {
+      ...await loginOptions(request, details), invalid: status !== 200 && status !== 429, throttled: status === 429 }));
+  }
+  // Shown only when the request can no longer be completed: it expired, or it was opened in another browser.
+  async function sendExpired(request: FastifyRequest, reply: FastifyReply, uid?: string) {
+    const id = uid && validInteractionUid(uid) ? await store.interactionClient(uid) : undefined;
+    const requester = id ? await registered(id) : undefined;
+    if (protocolUi) reply.header('content-security-policy', protocolPageCsp);
+    return reply.code(400).type('text/html').send(render('expired', {
+      language: preferred(request), appName: requester?.name, appUrl: requester?.home_url }));
   }
 
-  const store = createProtocolStore(pool, realm);
-  const byId = new Map(applications.map((client) => [client.id, client]));
-  const clients = applications.map((client): ClientMetadata => ({
-    client_id: client.id,
-    client_secret: openClientSecret(client.id, client.secret_ciphertext, encryptionKey),
-    token_endpoint_auth_method: 'client_secret_basic',
-    response_types: ['code'],
-    grant_types: ['authorization_code', 'refresh_token'],
-    redirect_uris: [client.callback],
-    post_logout_redirect_uris: [client.post_logout],
-    backchannel_logout_uri: client.backchannel_logout,
-    backchannel_logout_session_required: true,
-  }));
+  const store = createProtocolStore(pool, realm, client);
+  const web = createWebSessions(pool, issuer, realm);
+  const mailer = await createMailer(pool, encryptionKey);
   const wire: Pick<Configuration, 'fetch'> = {};
   let loopback: Agent | undefined;
+  let outbound = (url: string, init: RequestInit) => globalThis.fetch(url, init);
   if (process.env.IDENTITY_LOOPBACK_CA_FILE) {
-    const targets = new Set(applications
-      .map((client) => client.backchannel_logout)
-      .filter((url) => new URL(url).hostname.endsWith('.localhost')));
     const agent = new Agent({ connect: {
       ca: await readFile(process.env.IDENTITY_LOOPBACK_CA_FILE),
       lookup(_host, options, done) {
@@ -126,19 +190,21 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
       },
     } });
     loopback = agent;
-    wire.fetch = (url, options) => {
-      if (!targets.has(String(url))) throw new Error('The loopback profile permits only registered logout URLs.');
-      const request = { ...options, redirect: 'error' as const, dispatcher: agent };
-      return globalThis.fetch(url, request);
+    outbound = async (url, init) => {
+      if (!await loopbackReceiver(url)) throw new Error('The loopback profile permits only registered notification URLs.');
+      return globalThis.fetch(url, { ...init, redirect: 'error', dispatcher: agent } as RequestInit);
     };
+    wire.fetch = (url, options) => outbound(String(url), options as RequestInit);
   }
+  const notifier = await createNotifier(pool, issuer, signing, outbound);
 
   const policy = interactionPolicy.base();
-  if (signup) policy.add(new interactionPolicy.Prompt({ name: 'create', requestable: true }), 0);
+  if (registrationEnabled) policy.add(new interactionPolicy.Prompt({ name: 'create', requestable: true }), 0);
+  const identityScopes = ['email', 'profile', 'orgs'];
   const provider = new Provider(issuer.origin, {
     ...wire,
     adapter: store.Adapter,
-    clients,
+    clients: [],
     jwks: { keys: ring.keys },
     cookies: {
       keys: [cookieKey.trim()],
@@ -146,17 +212,20 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
       short: { httpOnly: true, sameSite: 'lax', secure: true },
     },
     ttl: {
-      AccessToken: 300, AuthorizationCode: 60, IdToken: 300, Interaction: signup ? oidcInteractionSeconds : 120,
+      AccessToken: 300, AuthorizationCode: 60, IdToken: 300, Interaction: registrationEnabled ? oidcInteractionSeconds : 120,
       Grant: 43_200, RefreshToken: 43_200, Session: 43_200,
     },
+    // Authorization code with PKCE is the only way in. Discovery advertises nothing else.
+    responseTypes: ['code'],
     pkce: { required: () => true },
-    scopes: ['openid', 'email'],
-    claims: { email: ['email', 'email_verified'] },
+    scopes: ['openid', ...identityScopes],
+    claims: { email: ['email', 'email_verified'], profile: ['name', 'locale'], orgs: ['orgs'] },
+    conformIdTokenClaims: false,
     expiresWithSession: () => true,
     issueRefreshToken: (_ctx, client) => client.grantTypeAllowed('refresh_token'),
     rotateRefreshToken: true,
     interactions: { policy, url: (_ctx, interaction) => `/interaction/${interaction.uid}` },
-    ...(signup ? { discovery: { prompt_values_supported: ['none', 'login', 'consent', 'create'] } } : {}),
+    ...(registrationEnabled ? { discovery: { prompt_values_supported: ['none', 'login', 'consent', 'create'] } } : {}),
     features: {
       devInteractions: { enabled: false },
       backchannelLogout: { enabled: true },
@@ -165,13 +234,12 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
         logoutSource(ctx, form) {
           ctx.type = 'html';
           if (protocolUi) ctx.set('content-security-policy', protocolPageCsp);
-          ctx.body = protocolUi?.('logout', false, form) ?? page('End the central session', `${form}
-            <button type="submit" form="op.logoutForm" name="logout" value="yes">End session</button>`);
+          ctx.body = render('logout', { form, language: ctx.get('accept-language').toLowerCase().startsWith('zh') ? 'zh-CN' : 'en' });
         },
         postLogoutSuccessSource(ctx) {
           ctx.type = 'html';
           if (protocolUi) ctx.set('content-security-policy', protocolPageCsp);
-          ctx.body = protocolUi?.('signed-out') ?? page('Signed out', '');
+          ctx.body = render('signed-out', { language: ctx.get('accept-language').toLowerCase().startsWith('zh') ? 'zh-CN' : 'en' });
         },
       },
       introspection: {
@@ -184,46 +252,67 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
       },
       resourceIndicators: {
         enabled: true,
-        getResourceServerInfo(_ctx, resource, client) {
-          if (resource !== byId.get(client.clientId)?.resource) throw new errors.InvalidTarget();
+        async getResourceServerInfo(_ctx, resource, client) {
+          if (resource !== (await registered(client.clientId))?.resource) throw new errors.InvalidTarget();
           return { scope: 'read', audience: resource, accessTokenFormat: 'opaque', accessTokenTTL: 300 };
         },
       },
     },
     async findAccount(_ctx, id) {
-      const account = (await pool.query<{ email: string; email_verified: boolean; security_epoch: number }>(
-        'SELECT email, email_verified_at IS NOT NULL AS email_verified, security_epoch FROM accounts WHERE id = $1 AND enabled', [id])).rows[0];
+      const account = (await pool.query<{ email: string; email_verified: boolean; security_epoch: number; name: string | null; locale: string | null }>(
+        `SELECT email, email_verified_at IS NOT NULL AS email_verified, security_epoch, display_name AS name, locale
+         FROM accounts WHERE id = $1 AND enabled`, [id])).rows[0];
       if (account && store.remember(id, account.security_epoch)) {
-        return { accountId: id, claims: () => ({ sub: id, email: account.email, email_verified: account.email_verified }) };
+        // An application keys its data on issuer and sub. The address is a contact detail, never an identity.
+        return { accountId: id, claims: async () => ({
+          sub: id, email: account.email, email_verified: account.email_verified,
+          name: account.name ?? account.email.split('@')[0], ...(account.locale ? { locale: account.locale } : {}),
+          orgs: await orgsFor(pool, id),
+        }) };
       }
     },
     async loadExistingGrant(ctx) {
       const { client, session, result } = ctx.oidc;
-      const entry = client && byId.get(client.clientId);
+      const entry = client && await registered(client.clientId);
       if (!session?.accountId || !entry) return;
       const id = result?.consent?.grantId ?? session.grantIdFor(entry.id);
       const existing = id && await provider.Grant.find(id);
-      const requestedEmail = ctx.oidc.requestParamScopes.has('email');
+      // Registered applications are first-party, so the identity scopes they ask for are granted without a consent page.
+      const requested = identityScopes.filter((scope) => ctx.oidc.requestParamScopes.has(scope));
       if (existing) {
-        if (requestedEmail && !existing.getOIDCScope().split(' ').includes('email')) {
-          existing.addOIDCScope('email');
+        const granted = existing.getOIDCScope().split(' ');
+        const missing = requested.filter((scope) => !granted.includes(scope));
+        if (missing.length) {
+          existing.addOIDCScope(missing.join(' '));
           await existing.save();
         }
         return existing;
       }
       const grant = new provider.Grant({ clientId: entry.id, accountId: session.accountId });
-      grant.addOIDCScope(requestedEmail ? 'openid email' : 'openid');
+      grant.addOIDCScope(['openid', ...requested].join(' '));
       grant.addResourceScope(entry.resource, 'read');
       await grant.save();
       return grant;
     },
   });
 
-  const serverFactory: FastifyServerFactory<HttpsServer> = (handler) => createServer(tls, (request, response) => {
+  // Signing out of every application in this browser also signs the browser out of the account
+  // center. Otherwise the next sign-in request would be completed silently from that session.
+  provider.on('end_session.success', (ctx) => {
+    const key = web.cookieKey({ headers: ctx.req.headers } as FastifyRequest);
+    if (!key) return;
+    void pool.query('DELETE FROM web_sessions WHERE token_digest = $1', [key]).catch(() => undefined);
+    const existing = ctx.res.getHeader('set-cookie');
+    const prior = existing === undefined ? [] : Array.isArray(existing) ? existing : [String(existing)];
+    ctx.res.setHeader('set-cookie', [...prior, web.cookie('').replace(/Max-Age=\d+/, 'Max-Age=0')]);
+  });
+
+  const https = { ...tls, handshakeTimeout: 10_000 };
+  const serverFactory: FastifyServerFactory<HttpsServer> = (handler) => createServer(https, (request, response) => {
     if (gateway && request.headers.host === gateway.host) gateway.route(request, response);
     else handler(request, response);
   });
-  const app = Fastify<HttpsServer>({ https: tls, bodyLimit: 4096, trustProxy: false,
+  const app = Fastify<HttpsServer>({ https, bodyLimit: 4096, trustProxy: false,
     ...(gateway ? { serverFactory } : {}), });
   app.addHook('onRequest', async (request, reply) => {
     if (request.headers.host !== issuer.host) return reply.code(421).send({ error: 'unexpected_host' });
@@ -247,96 +336,100 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
       return reply.code(503).send({ ready: false });
     }
   });
-  await registerBrowserAuth(app, pool, issuer, backupHash, realm, !canonical);
+  await registerBrowserAuth(app, { pool, issuer, web, mailer, notifier, store, encryptionKey, backupHash, realm, registrationEnabled });
+  registerTeams(app, pool, issuer, web, mailer, notifier);
+  registerAdmin(app, pool, issuer, web, mailer, notifier, encryptionKey);
+  registerSetup(app, pool, web, mailer, backupHash);
+  await registerApplicationApi(app, pool, issuer, store, encryptionKey, signing);
   protocolUi = await registerBrowserPage(app, issuer);
+
+  // Completes the authorization request and sends the browser straight back to the application.
+  async function finish(request: FastifyRequest, reply: FastifyReply, details: Details, account: string, result: Record<string, unknown> = {},
+    cookie?: string) {
+    reply.hijack();
+    if (cookie) reply.raw.setHeader('set-cookie', cookie);
+    try {
+      await provider.interactionFinished(request.raw, reply.raw, { login: { accountId: account }, ...result }, { mergeWithLastSubmission: false });
+    } catch {
+      if (reply.raw.headersSent) reply.raw.destroy();
+      else {
+        reply.raw.removeHeader('set-cookie');
+        reply.raw.writeHead(409, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store',
+          'content-security-policy': protocolPageCsp, 'referrer-policy': 'same-origin' })
+          .end(render('expired', { language: preferred(request, details.params.ui_locales) }));
+      }
+    }
+  }
+
   app.get<{ Params: { uid: string } }>('/interaction/:uid', async (request, reply) => store.request(async () => {
     const details = await provider.interactionDetails(request.raw, reply.raw).catch(() => undefined);
-    if (!details || details.uid !== request.params.uid || !validInteractionUid(details.uid)) {
-      return reply.code(400).send({ error: 'unexpected_interaction' });
-    }
+    if (!details || details.uid !== request.params.uid || !validInteractionUid(details.uid)) return sendExpired(request, reply, request.params.uid);
     if (details.prompt.name === 'create') return reply.redirect('/interaction/' + details.uid + '/register', 303);
     if (details.prompt.name !== 'login') return reply.code(400).send({ error: 'unexpected_interaction' });
-    return sendLogin(reply.header('referrer-policy', 'same-origin'), 200, details.uid);
+    // A browser already signed in to Identity continues without typing anything, unless the
+    // application asked for a fresh sign-in.
+    const viewer = details.prompt.reasons.every((reason) => reason === 'no_session') ? await web.viewer(request) : undefined;
+    if (viewer && await store.isEnabled(viewer.id)) return finish(request, reply, details, viewer.id);
+    return sendLogin(request, reply.header('referrer-policy', 'same-origin'), details);
   }));
   app.post<{ Params: { uid: string }; Body: URLSearchParams }>('/interaction/:uid', async (request, reply) => store.request(async () => {
     // A same-origin form response must preserve Origin for a retry after invalid credentials.
     reply.header('referrer-policy', 'same-origin');
     if (request.headers.origin !== issuer.origin) return reply.code(403).send({ error: 'unexpected_origin' });
     const details = await provider.interactionDetails(request.raw, reply.raw).catch(() => undefined);
-    if (!details || details.uid !== request.params.uid || details.prompt.name !== 'login') {
-      return reply.code(400).send({ error: 'unexpected_interaction' });
-    }
+    if (!details || details.uid !== request.params.uid || details.prompt.name !== 'login') return sendExpired(request, reply, request.params.uid);
     const body = request.body;
     if (!(body instanceof URLSearchParams) || body.getAll('email').length !== 1 || body.getAll('password').length !== 1) {
       return reply.code(400).send({ error: 'invalid_form' });
     }
     let email: string;
     try { email = normalizeEmail(body.get('email') ?? ''); }
-    catch { return sendLogin(reply, 400, details.uid); }
-    if (!await loginRateAllowed(pool, request.ip, email)) {
-      return sendLogin(reply.header('retry-after', '60'), 429, details.uid);
-    }
+    catch { return sendLogin(request, reply, details, 400); }
+    if (!await loginRateAllowed(pool, request.ip, email)) return sendLogin(request, reply.header('retry-after', '60'), details, 429);
     const account = await getLogin(pool, email);
     const authentic = await verifyPassword(body.get('password') ?? '', account?.password_hash ?? backupHash);
     if (!account?.enabled || !authentic || !store.remember(account.id, account.security_epoch) || !await store.isEnabled(account.id)) {
-      return sendLogin(reply, 401, details.uid);
+      await audit(pool, 'account.sign_in_failed', account?.id ?? 'unknown', account?.id);
+      return sendLogin(request, reply, details, 401);
     }
-    reply.hijack();
-    try {
-      await provider.interactionFinished(request.raw, reply.raw, { login: { accountId: account.id } }, { mergeWithLastSubmission: false });
-    } catch {
-      if (reply.raw.headersSent) reply.raw.destroy();
-      else reply.raw.writeHead(409, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store',
-        'content-security-policy': protocolPageCsp, 'referrer-policy': 'same-origin' }).end(loginPage(true, details.uid));
-    }
+    // The same sign-in also opens the account center in this browser.
+    const token = await transaction(pool, async (db) => {
+      const live = await db.query('SELECT 1 FROM accounts WHERE id = $1 AND enabled AND security_epoch = $2 FOR UPDATE',
+        [account.id, account.security_epoch]);
+      if (!live.rowCount) return undefined;
+      await audit(db, 'account.signed_in', account.id, account.id, typeof details.params.client_id === 'string' ? details.params.client_id : undefined);
+      return web.issue(db, account.id, account.security_epoch, request);
+    });
+    if (!token) return sendLogin(request, reply, details, 401);
+    return finish(request, reply, details, account.id, {}, web.cookie(token));
   }));
   type InteractionRequest = FastifyRequest<{ Params: { uid: string } }>;
   async function registrationInteraction(request: InteractionRequest, reply: FastifyReply) {
-    if (!signup || !protocolUi || !validInteractionUid(request.params.uid)) return undefined;
+    if (!registrationEnabled || !validInteractionUid(request.params.uid)) return undefined;
     const details = await provider.interactionDetails(request.raw, reply.raw).catch(() => undefined);
     return details?.uid === request.params.uid && ['login', 'create'].includes(details.prompt.name) ? details : undefined;
   }
-  const restartRegistration = (reply: FastifyReply) => reply.code(400).type('text/html').send(page(
-    'Authorization request expired', '<p>Return to the app and start sign-in again.</p><a href="/login">Sign in to Identity</a>'));
   app.get<{ Params: { uid: string } }>('/interaction/:uid/register', async (request, reply) => store.request(async () => {
     const details = await registrationInteraction(request, reply);
-    if (!details) return restartRegistration(reply);
+    if (!details) return sendExpired(request, reply, request.params.uid);
     await beginRegistrationIntent(pool, reply, details.uid, realm);
-    return reply.redirect(request.headers['accept-language']?.toLowerCase().startsWith('zh') ? '/zh/register' : '/register', 303);
+    return reply.redirect(localPath(preferred(request, details.params.ui_locales), '/register'), 303);
   }));
+  // The registration page sends the browser here once the account exists. The intent row is
+  // deleted as it is read, so the link completes one authorization request exactly once.
   app.get<{ Params: { uid: string } }>('/interaction/:uid/registered', async (request, reply) => store.request(async () => {
     const details = await registrationInteraction(request, reply);
     const intent = intentDigest(request, realm);
-    if (!details || !intent || !(await pool.query(
-      'SELECT 1 FROM registration_intents WHERE token_digest = $1 AND interaction_uid = $2 AND account_id IS NOT NULL AND expires_at > now()',
-      [intent, details.uid])).rowCount) return restartRegistration(reply);
-    const chinese = request.headers['accept-language']?.toLowerCase().startsWith('zh');
-    return reply.header('referrer-policy', 'same-origin').type('text/html').send(page(
-      chinese ? '继续前往应用' : 'Continue to your application',
-      '<form method="post"><button type="submit">' + (chinese ? '继续' : 'Continue') + '</button></form>',
-      chinese ? 'zh-CN' : 'en'));
-  }));
-  app.post<{ Params: { uid: string } }>('/interaction/:uid/registered', async (request, reply) => store.request(async () => {
-    if (request.headers.origin !== issuer.origin) return reply.code(403).send({ error: 'unexpected_origin' });
-    const details = await registrationInteraction(request, reply);
-    const intent = intentDigest(request, realm);
-    if (!details || !intent) return restartRegistration(reply);
+    if (!details || !intent) return sendExpired(request, reply, request.params.uid);
     const account = (await pool.query<{ id: string; security_epoch: number }>(
       `DELETE FROM registration_intents r USING accounts a
         WHERE r.token_digest = $1 AND r.interaction_uid = $2 AND r.expires_at > now() AND r.account_id = a.id
-          AND a.enabled AND a.security_epoch = r.account_epoch AND (a.email_verified_at IS NOT NULL OR $3)
-        RETURNING a.id, a.security_epoch`, [intent, details.uid, testenvSignupAllowed(issuer)])).rows[0];
-    if (!account || !store.remember(account.id, account.security_epoch) || !await store.isEnabled(account.id)) return restartRegistration(reply);
-    reply.hijack();
-    try {
-      await provider.interactionFinished(request.raw, reply.raw, {
-        login: { accountId: account.id }, ...(details.prompt.name === 'create' ? { create: {} } : {}),
-      }, { mergeWithLastSubmission: false });
-    } catch {
-      if (reply.raw.headersSent) reply.raw.destroy();
-      else reply.raw.writeHead(409, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-        .end(page('Authorization request expired', '<p>Return to the app and start sign-in again.</p>'));
+          AND a.enabled AND a.security_epoch = r.account_epoch
+        RETURNING a.id, a.security_epoch`, [intent, details.uid])).rows[0];
+    if (!account || !store.remember(account.id, account.security_epoch) || !await store.isEnabled(account.id)) {
+      return sendExpired(request, reply, request.params.uid);
     }
+    return finish(request, reply, details, account.id, details.prompt.name === 'create' ? { create: {} } : {});
   }));
   const callback = provider.callback();
   app.route({

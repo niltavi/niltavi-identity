@@ -6,11 +6,16 @@ import './style.css';
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing Identity application root.');
 
-const screen = root.dataset.protocol;
-if (screen === 'login' || screen === 'logout' || screen === 'signed-out') {
-  createRoot(root).render(<ProtocolPage view={screen} invalid={root.dataset.invalid === 'true'} registration={root.dataset.registration} />);
+const { protocol: view, ...data } = root.dataset;
+if (view === 'login' || view === 'logout' || view === 'signed-out' || view === 'expired') {
+  createRoot(root).render(<ProtocolPage data={{
+    view, invalid: data.invalid === 'true', throttled: data.throttled === 'true', registration: data.registration, recover: Boolean(data.recover),
+    language: data.language === 'zh-CN' ? 'zh-CN' : 'en', appName: data.appName, appUrl: data.appUrl,
+  }} />);
 } else {
-  const app = <BrowserApp initial={routeFor(window.location.pathname)} />;
+  // The prerendered markup knows the section only. The open tab is applied after hydration.
+  const { language, section } = routeFor(window.location.pathname);
+  const app = <BrowserApp initial={{ language, section }} />;
   if (root.hasAttribute('data-prerendered')) hydrateRoot(root, app);
   else createRoot(root).render(app);
 }

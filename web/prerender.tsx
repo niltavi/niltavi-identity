@@ -1,8 +1,8 @@
 import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { renderToString } from 'react-dom/server';
 import { BrowserApp } from './src/main';
-import { copy, pathFor } from './src/site';
-import type { Language, Section } from './src/site';
+import { copy, pathFor, sections } from './src/site';
+import type { Language } from './src/site';
 import { themeInitialization, themeKey } from './vendor/niltavi-ui/product/theme';
 
 const assets = new URL('./dist/identity-assets/', import.meta.url);
@@ -22,7 +22,7 @@ await Promise.all([
 ]);
 
 for (const language of ['en', 'zh-CN'] as const satisfies readonly Language[]) {
-  for (const section of ['home', 'login', 'register', 'workspace'] as const satisfies readonly Section[]) {
+  for (const section of sections) {
     const route = { language, section };
     const path = pathFor(route);
     const labels = copy[language];

@@ -8,7 +8,7 @@
     "node": "^24.0.0"
   },
   "scripts": {
-    "check": "tsc --noEmit && tsc --noEmit --project preview/tsconfig.json && tsc --noEmit --project web/tsconfig.json",
+    "check": "tsc --noEmit && tsc --noEmit --project preview/tsconfig.json && tsc --noEmit --project web/tsconfig.json && tsc --noEmit --project sdk/tsconfig.json",
     "test:lab": "playwright test",
     "test:service": "npm run build:service && playwright test --config playwright.service.config.ts",
     "test:account": "npm run build:service && node acceptance/browser-auth.mjs",
@@ -19,7 +19,12 @@
     "test": "npm run check && npm run test:lab",
     "preview:build": "vite build --config preview/vite.config.ts",
     "preview:lab": "npm run preview:build && node --import tsx preview/server.ts",
-    "test:preview": "playwright test --config playwright.preview.config.ts"
+    "test:preview": "playwright test --config playwright.preview.config.ts",
+    "build:sdk": "tsc --project sdk/tsconfig.json",
+    "build": "npm run build:service && npm run build:sdk && npm run build:web",
+    "local": "npm run build && node scripts/local.mjs",
+    "test:prd": "npm run build:service && node acceptance/prd.mjs",
+    "test:sdk": "npm run build:service && npm run build:sdk && node acceptance/sdk.mjs"
   },
   "devDependencies": {
     "@fastify/cookie": "11.1.5",
@@ -33,10 +38,12 @@
     "@types/nodemailer": "8.0.2",
     "@types/oidc-provider": "9.13.1",
     "@types/pg": "8.23.1",
+    "@types/qrcode": "^1.5.5",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "5.2.0",
     "openid-client": "6.9.1",
+    "qrcode": "^1.5.4",
     "react": "19.2.0",
     "react-aria-components": "1.22.1",
     "react-dom": "19.2.0",

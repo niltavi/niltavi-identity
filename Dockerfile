@@ -7,6 +7,8 @@ COPY tsconfig.json tsconfig.service.json ./
 COPY src/ src/
 COPY docs/en/for-agents.md docs/en/for-agents.md
 COPY docs/en/authentication.md docs/en/authentication.md
+COPY docs/en/integration.md docs/en/integration.md
+COPY preview/tsconfig.json preview/tsconfig.json
 COPY preview/src/theme/ preview/src/theme/
 COPY web/ web/
 RUN npm run build:service && npm run build:web
@@ -25,6 +27,7 @@ COPY --from=production-dependencies /identity/node_modules ./node_modules
 COPY --from=compile /identity/dist ./dist
 COPY --from=compile /identity/web/dist ./web/dist
 COPY --from=compile /identity/src/schema*.sql ./src/
+COPY --from=compile /identity/src/common-passwords.txt ./src/
 USER node
 EXPOSE 8443
 ENTRYPOINT ["node", "dist/cli.js"]

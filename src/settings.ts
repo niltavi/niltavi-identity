@@ -121,3 +121,13 @@ export function activateKey(directory: string, kid: string) {
     return { kid, changed: true };
   });
 }
+
+// Drops a key that has stopped signing once everything it signed has expired.
+export function retireKey(directory: string, kid: string) {
+  return changeRing(directory, async (ring) => {
+    if (!ring.keys.some((key) => key.kid === kid)) return { kid, changed: false };
+    if (ring.keys[0]?.kid === kid || ring.staged === kid) throw new Error('Only a key that no longer signs can be retired.');
+    await saveRing(directory, { keys: ring.keys.filter((key) => key.kid !== kid), ...(ring.staged ? { staged: ring.staged } : {}) });
+    return { kid, changed: true };
+  });
+}

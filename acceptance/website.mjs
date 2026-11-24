@@ -120,7 +120,7 @@ try {
   const configGate = new Promise(resolve => { releaseConfig = resolve; });
   let reportHeld;
   const configHeld = new Promise(resolve => { reportHeld = resolve; });
-  await page.route('**/account/config', async intercepted => {
+  await page.route('**/account/session', async intercepted => {
     reportHeld();
     await configGate;
     await intercepted.continue();
@@ -128,20 +128,19 @@ try {
   const headerHandle = await header.elementHandle();
   await header.getByRole('link', { name: '登录' }).click();
   try {
-    await Promise.race([configHeld, new Promise((_, reject) => setTimeout(() => reject(new Error('Configuration request was not held')), 8000).unref())]);
+    await Promise.race([configHeld, new Promise((_, reject) => setTimeout(() => reject(new Error('Session request was not held')), 8000).unref())]);
     await page.waitForURL(origin + '/zh/login');
-    await expect(page.getByRole('heading', { name: '邮箱登录' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '邮箱登录', exact: true })).toBeDisabled();
+    await expect(page.getByRole('main').locator('[aria-busy="true"]')).toBeVisible();
     assert.equal(await headerHandle.evaluate(n => n.isConnected), true);
     assert.equal(await page.evaluate(() => window.__identityDoc), 'retained');
     assert.equal(await colorCheck('dark'), dark);
   } finally { releaseConfig(); }
-  await expect(page.getByRole('button', { name: '邮箱登录', exact: true })).toBeEnabled();
-  await page.unroute('**/account/config');
+  await expect(page.getByRole('button', { name: '登录', exact: true })).toBeEnabled();
+  await page.unroute('**/account/session');
   await header.getByRole('button', { name: '语言' }).click();
   await page.getByRole('menu').getByText('English', { exact: true }).click();
   await page.waitForURL(origin + '/login');
-  await expect(page.getByRole('heading', { name: 'Sign in by email' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
   assert.equal(await headerHandle.evaluate(n => n.isConnected), true);
   assert.equal(await colorCheck('dark'), dark);
   await header.getByRole('link', { name: 'Identity', exact: true }).click();
@@ -159,7 +158,7 @@ try {
   }
   const guideUrl = await page.getByRole('link', { name: 'Install with an agent' }).getAttribute('href');
   assert.match(await page.evaluate(async path => (await fetch(path)).text(), guideUrl), /Install Niltavi Identity/);
-  await page.getByRole('link', { name: 'Register by email' }).click();
+  await page.getByRole('link', { name: 'Create an account' }).click();
   await page.waitForURL(origin + '/register');
   await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
   await expect(page.getByLabel('Password', { exact: true })).toBeVisible();
