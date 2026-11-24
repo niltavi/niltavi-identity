@@ -1,12 +1,19 @@
-import { Button, Dropdown, Form, Input, Label, Table, TextField, buttonVariants } from '@heroui/react';
+import { Button, Dropdown, Form, Input, Label, Table, TextField } from '@heroui/react';
+import ArrowLeft from '@gravity-ui/icons/ArrowLeft';
+import Envelope from '@gravity-ui/icons/Envelope';
+import House from '@gravity-ui/icons/House';
+import LayoutCellsLarge from '@gravity-ui/icons/LayoutCellsLarge';
+import ListUl from '@gravity-ui/icons/ListUl';
+import Person from '@gravity-ui/icons/Person';
+import Persons from '@gravity-ui/icons/Persons';
 import { useState } from 'react';
 import { RequestFailure, call, codeOf, problem } from './api';
 import type { MailStatus } from './api';
 import { container } from './site';
 import type { Route } from './site';
 import { MailSetup } from './setup';
+import { SidebarLayout } from './sidebar-layout';
 import { Choice, CodeField, ConfirmButton, Empty, Loaded, Notice, PageLink, Panel, Secret, State, TaskFeedback, readForm, useApp, useLoad, useTask, useTime } from './ui';
-import { TabbedPage } from './workspace';
 
 type Overview = {
   counts: { accounts: number; teams: number; applications: number; deletionRequests: number };
@@ -19,19 +26,24 @@ export function Admin({ route }: { route: Route }) {
   const unlock = useTask();
   const [codeError, setCodeError] = useState<string>();
   const overview = useLoad(() => call<Overview>('/admin/api/overview'), 'admin:' + (account?.instanceRole ?? ''));
+  const title = t('Instance console', '实例管理台');
   if (!account) return null;
   if (!account.instanceRole) {
     return <main className={`${container} flex-1 py-8 md:py-12`}><div className="grid max-w-xl gap-4">
-      <h1 className="text-balance text-3xl font-semibold tracking-tight">{t('Instance console', '实例管理台')}</h1>
+      <h1 className="text-balance text-3xl font-semibold tracking-tight">{title}</h1>
       <Notice status="default">{problem('administrator_required', language)}</Notice>
       <PageLink to={{ section: 'workspace' }}>{t('Back to your account', '返回账号中心')}</PageLink>
     </div></main>;
   }
-  const tabs = [
-    { id: 'overview', label: t('Overview', '概览') }, { id: 'accounts', label: t('Accounts', '账号') }, { id: 'teams', label: t('Teams', '团队') },
-    { id: 'applications', label: t('Applications', '应用') }, { id: 'mail', label: t('Outgoing mail', '发信') }, { id: 'audit', label: t('Audit log', '审计日志') },
+  const pages = [
+    { id: undefined, label: t('Overview', '概览'), icon: House },
+    { id: 'accounts', label: t('Accounts', '账号'), icon: Person },
+    { id: 'teams', label: t('Teams', '团队'), icon: Persons },
+    { id: 'applications', label: t('Applications', '应用'), icon: LayoutCellsLarge },
+    { id: 'mail', label: t('Outgoing mail', '发信'), icon: Envelope },
+    { id: 'audit', label: t('Audit log', '审计日志'), icon: ListUl },
   ];
-  const tab = tabs.some(({ id }) => id === route.tab) ? route.tab : 'overview';
+  const tab = pages.find(({ id }) => id === route.tab)?.id;
   const state = overview.data;
   const console: Console | undefined = state && { overview: state, reload: overview.reload };
   const banner = state && (state.mail.source === 'none' || !state.canWrite) && <div className="grid gap-3">
@@ -61,11 +73,14 @@ export function Admin({ route }: { route: Route }) {
       {t('You can look around. Making changes needs two-step verification on your account.', '当前只能查看。进行更改需要先为你的账号开启两步验证。')}
     </Notice>)}
   </div>;
-  return <TabbedPage title={t('Instance console', '实例管理台')} route={route} tabs={tabs} banner={banner}
-    aside={<PageLink to={{ section: 'workspace' }} className={buttonVariants({ variant: 'secondary', size: 'sm' })}>{t('Account center', '账号中心')}</PageLink>}>
-    <Loaded source={overview}>{() => console ? (tab === 'overview' ? <Summary console={console} /> : tab === 'accounts' ? <Accounts console={console} />
+  return <SidebarLayout title={title} navigation={t('Instance console navigation', '实例管理台导航')}
+    openNavigation={t('Open instance console navigation', '打开实例管理台导航')} section="admin" pages={pages} activeTab={tab}
+    secondary={{ to: { section: 'workspace' }, icon: ArrowLeft, label: t('Account center', '账号中心') }}>
+    <h1 className="text-balance text-3xl font-semibold tracking-tight">{title}</h1>
+    {banner}
+    <Loaded source={overview}>{() => console ? (!tab ? <Summary console={console} /> : tab === 'accounts' ? <Accounts console={console} />
       : tab === 'teams' ? <AllTeams /> : tab === 'applications' ? <Applications console={console} /> : tab === 'mail' ? <Mail console={console} /> : <Audit />) : null}</Loaded>
-  </TabbedPage>;
+  </SidebarLayout>;
 }
 
 function Summary({ console: { overview, reload } }: { console: Console }) {
