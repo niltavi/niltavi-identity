@@ -310,6 +310,41 @@ await journey('console scrolls the content without moving the header or navigati
   }
 });
 
+await journey('account center has no site footer and scrolls within the content area', async () => {
+  for (const width of [320, 1280]) {
+    const mobile = width === 320;
+    const page = await session({ viewport: { width, height: 360 }, colorScheme: mobile ? 'dark' : 'light' });
+    await page.context().addCookies(await owner.context().cookies());
+    const workspace = origin + (mobile ? '/zh/workspace' : '/workspace');
+    await page.goto(workspace);
+    await page.getByRole('heading', { level: 1, name: mobile ? '账号中心' : 'Account center' }).waitFor();
+    await expect(page.getByRole('contentinfo')).toHaveCount(0);
+    await noOverflow(page, 'account center');
+
+    const content = page.getByRole('main');
+    const header = page.getByRole('banner');
+    const trigger = page.getByRole('button', { name: '打开账号中心导航' });
+    const sidebarControl = mobile ? trigger : page.getByRole('button', { name: 'Account menu' });
+    const headerBefore = await header.boundingBox();
+    const sidebarBefore = await sidebarControl.boundingBox();
+    await content.press('End');
+    await expect.poll(() => content.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+    assert.deepEqual(await header.boundingBox(), headerBefore);
+    assert.deepEqual(await sidebarControl.boundingBox(), sidebarBefore);
+    assert.ok(await page.evaluate(() => {
+      const doc = document.scrollingElement;
+      return doc.scrollTop === 0 && doc.scrollHeight === doc.clientHeight;
+    }));
+
+    if (mobile) await trigger.click();
+    const navigation = page.getByRole('navigation', { name: mobile ? '账号中心导航' : 'Account navigation' });
+    await navigation.getByRole('link', { name: mobile ? '安全' : 'Security' }).click();
+    await page.waitForURL(workspace + '/security');
+    await expect.poll(() => content.evaluate(node => node.scrollTop)).toBe(0);
+    await page.context().close();
+  }
+});
+
 await journey('register with mail: password errors only after validation, 6-digit code, signed in', async () => {
   adaPage = await session();
   await adaPage.goto(origin + '/register');

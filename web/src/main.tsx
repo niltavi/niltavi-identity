@@ -115,14 +115,14 @@ export function BrowserApp({ initial }: { initial: Route }) {
   }, [route]);
 
   const isHome = route.section === 'home';
-  const isAdmin = route.section === 'admin';
-  return <div className={`flex flex-col bg-background text-foreground ${isAdmin ? 'admin-shell' : 'min-h-svh'}`}>
+  const hasSidebar = route.section === 'workspace' || route.section === 'admin';
+  return <div className={`flex flex-col bg-background text-foreground ${hasSidebar ? 'app-shell' : 'min-h-svh'}`}>
     <BrandHeader route={route} navigate={navigate} publicPage={isHome} />
     {isHome ? <Website language={route.language} navigate={navigate} /> : interactive
       ? <Identity route={route} navigate={navigate} />
       : <main className={container + ' flex-1 py-8 md:py-12'} aria-busy="true">
           <p role="status" className="text-muted">{route.language === 'en' ? 'Loading…' : '正在加载…'}</p>
         </main>}
-    {!isAdmin && <BrandFooter />}
+    {!hasSidebar && <BrandFooter />}
   </div>;
 }

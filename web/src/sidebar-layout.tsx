@@ -8,26 +8,29 @@ import { AppSidebar, UserMenu } from '../vendor/niltavi-ui/templates/saas/Naviga
 import { call } from './api';
 import type { Account } from './api';
 import { container, pathFor, routeFor } from './site';
+import type { Route } from './site';
 import { TaskFeedback, useApp, useTask } from './ui';
 
-export function SidebarLayout({ title, navigation, openNavigation, section, pages, activeTab, account, children }: {
+export function SidebarLayout({ title, navigation, openNavigation, route, pages, activeTab, account, children }: {
   title: string;
   navigation: string;
   openNavigation: string;
-  section: 'workspace' | 'admin';
+  route: Route;
   pages: { id: string | undefined; label: string; icon: ComponentType<SVGProps<SVGSVGElement>> }[];
   activeTab: string | undefined;
   account: Account;
   children: ReactNode;
 }) {
-  const { language, navigate, refresh, t } = useApp();
+  const { navigate, refresh, t } = useApp();
+  const { language, section } = route;
   const signOut = useTask();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const isAdmin = section === 'admin';
   const contentRef = useRef<HTMLElement>(null);
+  const contentPath = pathFor(route);
   useLayoutEffect(() => {
     if (contentRef.current) contentRef.current.scrollTop = 0;
-  }, [activeTab]);
+  }, [contentPath]);
 
   function followSidebarLink(href: string) {
     const { pathname, search } = new URL(href, window.location.href);
@@ -54,10 +57,8 @@ export function SidebarLayout({ title, navigation, openNavigation, section, page
         <Label>{destination.label}</Label>
       </Dropdown.Item>}
     </UserMenu>} />;
-  const contentClass = `${container} grid min-w-0 content-start gap-5 py-8 md:py-12`;
-  const content = <><TaskFeedback task={signOut} />{children}</>;
-  return <div className={`grid flex-1 grid-cols-[auto_minmax(0,1fr)] ${isAdmin ? 'min-h-0 grid-rows-[minmax(0,1fr)]' : ''}`}>
-    <RouterProvider navigate={followSidebarLink}><div className={isAdmin ? 'sidebar-frame sidebar-frame--viewport' : 'sidebar-frame'}>
+  return <div className="grid min-h-0 flex-1 grid-cols-[auto_minmax(0,1fr)] grid-rows-[minmax(0,1fr)]">
+    <RouterProvider navigate={followSidebarLink}><div className="sidebar-frame">
       <Drawer isOpen={drawerOpen} onOpenChange={setDrawerOpen}>
         <Button size="sm" variant="ghost" isIconOnly className="md:hidden" aria-label={openNavigation}>
           <Bars width={18} height={18} aria-hidden="true" />
@@ -76,8 +77,11 @@ export function SidebarLayout({ title, navigation, openNavigation, section, page
       </Drawer>
       <div className="hidden min-h-0 flex-1 md:block">{sidebar}</div>
     </div></RouterProvider>
-    {isAdmin ? <main ref={contentRef} tabIndex={0} className="admin-content min-h-0 min-w-0">
-      <div className={contentClass}>{content}</div>
-    </main> : <main className={contentClass}>{content}</main>}
+    <main ref={contentRef} tabIndex={0} className="app-content min-h-0 min-w-0">
+      <div className={`${container} grid min-w-0 content-start gap-5 py-8 md:py-12`}>
+        <TaskFeedback task={signOut} />
+        {children}
+      </div>
+    </main>
   </div>;
 }

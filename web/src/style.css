@@ -22,42 +22,32 @@
 }
 
 @layer components {
-  .admin-shell {
+  .app-shell {
     height: 100dvh;
     overflow: hidden;
   }
 
-  .admin-shell > header { flex-shrink: 0; }
-  .admin-shell > main { min-height: 0; overflow-y: auto; }
+  .app-shell > header { flex-shrink: 0; }
+  .app-shell > main { min-height: 0; overflow-y: auto; }
 
-  .admin-content {
+  .app-content {
     overflow-y: auto;
     overscroll-behavior-y: contain;
   }
 
-  .admin-content:focus-visible {
+  .app-content:focus-visible {
     outline: 2px solid var(--focus);
     outline-offset: -2px;
   }
 
   .sidebar-frame {
-    position: sticky;
-    inset-block-start: 0;
     display: flex;
-    align-self: start;
     flex-direction: column;
     width: calc(var(--spacing) * 12);
-    height: calc(100svh - var(--spacing) * 15);
+    min-height: 0;
     padding: calc(var(--spacing) * 2);
     border-inline-end: var(--border-width) solid var(--separator);
     background: var(--surface-secondary);
-  }
-
-  .sidebar-frame--viewport {
-    position: static;
-    align-self: stretch;
-    height: auto;
-    min-height: 0;
   }
 
   @media (min-width: 768px) {
