@@ -1,11 +1,13 @@
-import { Avatar, Button, Drawer, Dropdown, FieldError, Form, Input, Label, Link, Modal, Tabs, TextField } from '@heroui/react';
+import { Avatar, Button, Card, Drawer, Dropdown, FieldError, Form, Input, Label, Link, Modal, Tabs, TextField } from '@heroui/react';
 import ArrowRightFromSquare from '@gravity-ui/icons/ArrowRightFromSquare';
 import Bars from '@gravity-ui/icons/Bars';
+import ChevronRight from '@gravity-ui/icons/ChevronRight';
 import Clock from '@gravity-ui/icons/Clock';
 import Gear from '@gravity-ui/icons/Gear';
 import House from '@gravity-ui/icons/House';
 import Key from '@gravity-ui/icons/Key';
 import LayoutCellsLarge from '@gravity-ui/icons/LayoutCellsLarge';
+import Person from '@gravity-ui/icons/Person';
 import Persons from '@gravity-ui/icons/Persons';
 import ShieldCheck from '@gravity-ui/icons/ShieldCheck';
 import QRCode from 'qrcode';
@@ -13,7 +15,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { call, codeOf, problem } from './api';
 import type { Account, AgentToken, Team, TeamRole } from './api';
-import { container } from './site';
+import { container, followRoute, pathFor } from './site';
 import type { Route } from './site';
 import {
   Choice, CodeField, ConfirmButton, CopyButton, Empty, Loaded, Notice, PageLink, Panel, Secret, State, TaskFeedback, readForm, useApp, useLoad, useTask, useTime,
@@ -191,9 +193,10 @@ function Overview() {
 }
 
 function Preferences() {
-  const { account, refresh, t } = useApp();
+  const { account, language, navigate, refresh, t } = useApp();
   const task = useTask();
   const [locale, setLocale] = useState<string>(account?.locale ?? 'browser');
+  const management: Route = { language, section: 'workspace', tab: 'settings', accountManagement: true };
   return <>
     <Panel title={t('Preferences', '偏好设置')}
       description={t('Choose the language for email verification and password reset messages.', '选择邮箱验证和密码重置邮件的语言。')}>
@@ -211,9 +214,12 @@ function Preferences() {
         <div><Button type="submit" isPending={task.pending === 'save'}>{t('Save', '保存')}</Button></div>
       </Form>
     </Panel>
-    <PageLink to={{ section: 'workspace', tab: 'settings', accountManagement: true }} className="justify-self-start">
-      {t('Account management', '账号管理')}
-    </PageLink>
+    <Card<'a'> className="min-h-14 flex-row items-center font-medium hover:bg-default focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
+      render={props => <a {...props} />} href={pathFor(management)} onClick={event => followRoute(event, management, navigate)}>
+      <Person width={18} height={18} className="shrink-0 text-muted" aria-hidden="true" />
+      <span className="flex-1">{t('Account management', '账号管理')}</span>
+      <ChevronRight width={16} height={16} className="shrink-0 text-muted" aria-hidden="true" />
+    </Card>
   </>;
 }
 
