@@ -16,6 +16,7 @@ type Account = {
 type Managed = { id: string; email: string; enabled: boolean };
 type Settings = {
   registrationAvailable: boolean;
+  registrationMode: 'verify-email' | 'unverified-testenv';
   registrationDomain?: string;
   managedAccounts: boolean;
   applications: Array<{ name: string; url: string }>;
@@ -35,6 +36,10 @@ const notices: Record<string, [string, string]> = {
   unexpected_response: ['Identity could not complete the request. Try again.', '服务暂时无法完成请求，请稍后重试。'],
   connection_failed: ['Could not connect to Identity. Check your connection and try again.', '无法连接身份服务，请检查网络后重试。'],
   code_sent: ['Check your email. The code is valid for 15 minutes.', '请查收验证码，验证码 15 分钟内有效。'],
+  email_in_use: ['This email already has an account. Sign in to continue.', '此邮箱已有账号，请登录。'],
+  account_created: ['Your account is ready. Sign in with the password you chose.', '账号已创建。请使用刚设置的密码登录。'],
+  enrollment_expired: ['This registration has expired. Start again for a new code.', '本次注册已过期，请重新注册并获取新验证码。'],
+  resend_wait: ['Wait a minute before requesting another code.', '请等待一分钟再重发验证码。'],
   verified: ['Your email is verified. Sign in with the password you chose.', '邮箱已验证，账号已创建。请使用刚设置的密码登录。'],
   ended: ['All your sessions have ended.', '你的会话已全部结束。'],
   signed_out: ['You have signed out of this session.', '你已退出当前会话。'],
@@ -51,7 +56,8 @@ class RequestFailure extends Error {
 
 async function api<T>(path: string, values?: Record<string, string>): Promise<T> {
   const response = await fetch('/account/' + path, values === undefined ? {} : {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(values),
+    method: 'POST', headers: { 'content-type': 'application/json', 'accept-language': document.documentElement.lang },
+    body: JSON.stringify(values),
   });
   if (response.status === 204) return undefined as T;
   const result = await response.json() as { error?: string };
@@ -59,7 +65,7 @@ async function api<T>(path: string, values?: Record<string, string>): Promise<T>
   return result as T;
 }
 
-export function ProtocolPage({ view, invalid }: { view: 'login' | 'logout' | 'signed-out'; invalid: boolean }) {
+export function ProtocolPage({ view, invalid, registration }: { view: 'login' | 'logout' | 'signed-out'; invalid: boolean; registration: string | undefined }) {
   const title = view === 'login' ? 'Sign in to Niltavi Identity' : view === 'logout' ? 'End the central session' : 'Signed out';
   return <div className="flex min-h-svh flex-col bg-background text-foreground">
     <BrandHeader route={{ language: 'en', section: 'login' }} />
@@ -75,7 +81,7 @@ export function ProtocolPage({ view, invalid }: { view: 'login' | 'logout' | 'si
             <TextField name="password" type="password" isRequired><Label>Password</Label><Input className="min-w-0 w-full" autoComplete="current-password" /></TextField>
             <Button type="submit">Sign in</Button>
           </Form>
-          <Link href="/register" className="mt-5">Register by email</Link>
+          {registration && <Link href={registration} className="mt-5">Register by email</Link>}
         </Card.Content></Card> : view === 'logout' ? <Button type="submit" variant="danger"
           form="op.logoutForm" name="logout" value="yes">End session</Button> : <Link href="/">Return to Identity</Link>}
       </div>
@@ -132,7 +138,22 @@ function Identity({ route, navigate }: { route: Route; navigate: Navigate }) {
     if (!account && section === 'workspace') navigate({ language, section: 'login' }, true);
   }, [account, initializing, language, navigate, section]);
 
-  useEffect(() => { if (section !== 'register') setVerifying(false); }, [section]);
+  useEffect(() => {
+    if (section !== 'register') {
+      setVerifying(false);
+      return;
+    }
+    if (settings?.registrationMode !== 'verify-email') return;
+    let current = true;
+    void api<{ email: string }>('enrollment').then(({ email }) => {
+      if (!current) return;
+      setEmail(email);
+      setVerifying(true);
+    }).catch(error => {
+      if (current && !(error instanceof RequestFailure && error.status === 404)) report(error);
+    });
+    return () => { current = false; };
+  }, [report, section, settings?.registrationMode]);
 
   async function run(work: () => Promise<void>) {
     setPending(true);
@@ -142,12 +163,26 @@ function Identity({ route, navigate }: { route: Route; navigate: Navigate }) {
     finally { setPending(false); }
   }
 
+  function completeRegistration(continueTo: string | undefined, verified: boolean) {
+    if (continueTo && /^\/interaction\/[A-Za-z0-9_-]{16,128}\/registered$/.test(continueTo)) {
+      window.location.assign(continueTo);
+      return;
+    }
+    setVerifying(false);
+    navigate(destination('login'), true);
+    setMessage({ code: verified ? 'verified' : 'account_created' });
+  }
+
   async function submitCredentials({ email: address, password }: { email: string; password: string }) {
     setMessage(undefined);
     setEmail(address);
     try {
       if (step === 'register') {
-        await api('register', { email: address, password });
+        const result = await api<{ created?: true; continueTo?: string }>('register', { email: address, password });
+        if (result.created) {
+          completeRegistration(result.continueTo, false);
+          return;
+        }
         setVerifying(true);
         setMessage({ code: 'code_sent' });
       } else {
@@ -168,11 +203,9 @@ function Identity({ route, navigate }: { route: Route; navigate: Navigate }) {
     const fields = new FormData(form);
     const code = String(fields.get('code') ?? '').trim();
     void run(async () => {
-      await api('verify', { email, code });
+      const result = await api<{ created: true; continueTo?: string }>('verify', { email, code });
       form.reset();
-      setVerifying(false);
-      navigate(destination('login'), true);
-      setMessage({ code: 'verified' });
+      completeRegistration(result.continueTo, true);
     });
   }
 
@@ -227,8 +260,14 @@ function Identity({ route, navigate }: { route: Route; navigate: Navigate }) {
               <RouteLink route={alternate} navigate={navigate} onClick={() => setMessage(undefined)}>
                 {text('Sign in by email', '邮箱登录')}
               </RouteLink>
+              <Button variant="ghost" isDisabled={pending} onPress={() => void run(async () => {
+                await api('resend', {});
+                setMessage({ code: 'code_sent' });
+              })}>
+                {text('Send another code', '重发验证码')}
+              </Button>
               <Button variant="ghost" isDisabled={pending} onPress={() => { setVerifying(false); setMessage(undefined); }}>
-                {text('Change email or resend', '修改邮箱或重发')}
+                {text('Change email', '修改邮箱')}
               </Button>
             </div>
           </Card.Content>
@@ -243,6 +282,8 @@ function Identity({ route, navigate }: { route: Route; navigate: Navigate }) {
             {step === 'register' && settings?.registrationDomain &&
               <p className="text-sm text-muted">{text('Test mailbox domain', '验收邮箱域名')} @{settings.registrationDomain}</p>}
             {step === 'register' && settings && !settings.registrationAvailable && <p className="text-sm text-muted">{label('registration_unavailable')}</p>}
+            {step === 'register' && settings?.registrationMode === 'unverified-testenv' &&
+              <p className="text-sm text-muted">{text('Test environment. Email ownership is unverified.', '测试环境。注册不会验证邮箱归属。')}</p>}
           </EmailPasswordForm>
         </fieldset> : <>
           <Card>
@@ -250,7 +291,7 @@ function Identity({ route, navigate }: { route: Route; navigate: Navigate }) {
             <Card.Content>
               <dl className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
                 <div><dt className="text-sm text-muted">{text('Account ID', '账号标识')}</dt><dd className="wrap-anywhere">{account.id}</dd></div>
-                <div><dt className="text-sm text-muted">{text('Email status', '邮箱状态')}</dt><dd>{account.emailVerified ? text('Verified', '已验证') : text('Operator-created', '由操作员创建')}</dd></div>
+                <div><dt className="text-sm text-muted">{text('Email status', '邮箱状态')}</dt><dd>{account.emailVerified ? text('Verified', '已验证') : text('Unverified', '未验证')}</dd></div>
                 <div><dt className="text-sm text-muted">{text('Signed in at', '本次登录时间')}</dt><dd>{formatTime(account.signedInAt)}</dd></div>
                 <div><dt className="text-sm text-muted">{text('Session expires', '当前会话到期')}</dt><dd>{formatTime(account.expiresAt)}</dd></div>
                 <div><dt className="text-sm text-muted">{text('Active workspace sessions', '有效工作区会话')}</dt><dd>{account.activeSessions}</dd></div>

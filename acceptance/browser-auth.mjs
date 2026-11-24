@@ -100,8 +100,8 @@ let app;
 try {
   await dbAdmin.query(`CREATE SCHEMA "${schema}"`);
   await initializeSecrets(process.env.IDENTITY_SECRETS_DIR);
-  assert.deepEqual(await migrate(pool), { version: 3, changed: true });
-  assert.deepEqual(await migrate(pool), { version: 3, changed: false });
+  assert.deepEqual(await migrate(pool), { version: 4, changed: true });
+  assert.deepEqual(await migrate(pool), { version: 4, changed: false });
   await createAccount(pool, operator, password);
   await createAccount(pool, member, password);
   app = await service(pool);

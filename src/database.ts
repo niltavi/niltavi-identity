@@ -40,7 +40,7 @@ async function audit(db: Queryable, action: string, target: string) {
   await db.query('INSERT INTO audit_events (action, target) VALUES ($1, $2)', [action, target]);
 }
 
-const migrationFiles = ['schema.sql', 'schema-browser.sql', 'schema-enrollment.sql'];
+const migrationFiles = ['schema.sql', 'schema-browser.sql', 'schema-enrollment.sql', 'schema-registration-intents.sql'];
 
 export async function migrate(pool: Pool) {
   const files = migrationFiles;

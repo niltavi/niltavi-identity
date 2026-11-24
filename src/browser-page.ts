@@ -49,6 +49,6 @@ export async function registerBrowserPage(app: FastifyInstance, issuer: URL) {
       .type(type).send(createReadStream(asset)));
   }
 
-  return (view: ProtocolView, invalid = false, providerForm?: string) => page.replace(mount,
-    () => `${providerForm ? `<div hidden>${providerForm}</div>` : ''}<div id="root" data-protocol="${view}" data-invalid="${invalid}"></div>`);
+  return (view: ProtocolView, invalid = false, providerForm?: string, registration?: string) => page.replace(mount,
+    () => `${providerForm ? `<div hidden>${providerForm}</div>` : ''}<div id="root" data-protocol="${view}" data-invalid="${invalid}"${registration ? ` data-registration="${registration}"` : ''}></div>`);
 }
