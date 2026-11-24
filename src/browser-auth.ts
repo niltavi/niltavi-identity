@@ -3,16 +3,17 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import { digest, readBrowserCookie, setBrowserCookie } from './browser-cookie.js';
 import {
-  PasswordRejected, openClientSecret, passwordHash, passwordProblem, passwordRule, sealClientSecret, totpSecret, totpStep, verifyPassword,
+  PasswordRejected, openClientSecret, passwordHash, passwordProblem, passwordRule, sealClientSecret, totpSecret, totpStep, verifyAccountPassword,
 } from './credentials.js';
 import {
-  applyAccountEnabled, audit, getLogin, getSetting, insertAccount, issueAccountLink, loginRateAllowed, rateAllowed, transaction,
+  applyAccountEnabled, audit, getLogin, getSetting, issueAccountLink, loginRateAllowed, rateAllowed, transaction,
 } from './database.js';
 import { mailAddress, messages } from './mail.js';
 import type { Mailer } from './mail.js';
 import type { Notifier } from './notify.js';
 import type { ProtocolStore } from './protocol-store.js';
 import { intentDigest } from './registration-intent.js';
+import { registerNewAccount, registrationPolicy, registrationRefusal } from './registration.js';
 import { failure, fields, requestLanguage } from './web-session.js';
 import type { WebSessions } from './web-session.js';
 
@@ -24,12 +25,6 @@ export const identityTestenvOrigin = 'https://identity.testenv.niltavi.com';
 
 export function testenvSignupAllowed(issuer: URL) {
   return process.env.IDENTITY_TESTENV_UNVERIFIED_SIGNUP === 'true' && issuer.origin === identityTestenvOrigin;
-}
-
-export type RegistrationPolicy = 'open' | 'invite';
-export async function registrationPolicy(pool: Pool): Promise<RegistrationPolicy> {
-  return await getSetting<RegistrationPolicy>(pool, 'registration') ??
-    (process.env.IDENTITY_DEPLOYMENT_PROFILE === 'hosted' ? 'invite' : 'open');
 }
 
 export type AccountServices = {
@@ -52,16 +47,14 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
   }
   if (allowedDomain) mailAddress(`mail@${allowedDomain}`);
   const mailLanguage = requestLanguage;
-  const initialized = async () => testenvSignup || Boolean(await getSetting<boolean>(pool, 'initialized'));
-
   app.get('/account/config', async () => {
     const [ready, codes, general, policy, applications] = await Promise.all([
-      initialized(), mailer.codes(), mailer.general(), registrationPolicy(pool),
+      getSetting<boolean>(pool, 'initialized'), mailer.codes(), mailer.general(), registrationPolicy(pool),
       pool.query<{ id: string; name: string; url: string }>('SELECT id, name, home_url AS url FROM applications WHERE enabled ORDER BY name, id'),
     ]);
     return {
-      initialized: ready,
-      registrationAvailable: registrationEnabled && ready,
+      initialized: Boolean(ready),
+      registrationAvailable: registrationEnabled && policy !== 'closed',
       registrationMode: testenvSignup ? 'unverified-testenv' : codes ? 'verify-email' : 'immediate',
       registrationPolicy: policy, recoveryAvailable: general, passwordRule,
       passwordlessAvailable: !testenvSignup && codes,
@@ -92,42 +85,34 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
   }
 
   app.post('/account/register', guard, async (request, reply) => {
-    if (!registrationEnabled || !await initialized()) return failure(reply, 503, 'registration_unavailable');
+    if (!registrationEnabled) return failure(reply, 503, 'registration_unavailable');
     const passwordless = !testenvSignup && await mailer.codes();
-    const submitted = passwordless
-      ? (fields(request, 'email') ?? fields(request, 'email', 'invitation') ?? fields(request, 'email', 'password') ?? fields(request, 'email', 'password', 'invitation'))
-      : (fields(request, 'email', 'password') ?? fields(request, 'email', 'password', 'invitation'));
+    const withPassword = fields(request, 'email', 'password', 'invitation') ?? fields(request, 'email', 'password');
+    const withCode = passwordless ? fields(request, 'email', 'invitation') ?? fields(request, 'email') : undefined;
     let email: string;
-    try { email = mailAddress(submitted?.[0] ?? ''); }
+    try { email = mailAddress((withPassword ?? withCode)?.[0] ?? ''); }
     catch { return failure(reply, 400, 'invalid_email'); }
     if (allowedDomain && email.split('@')[1] !== allowedDomain) return failure(reply, 400, 'registration_domain');
     if (!await loginRateAllowed(pool, request.ip, email, 'register', 5)) return failure(reply, 429, 'try_later');
-    const inviteOnly = !testenvSignup && await registrationPolicy(pool) === 'invite';
-    if (inviteOnly) {
-      const invitation = submitted?.find((_, i) => i > 0 && /^[\w-]{43}$/.test(submitted[i]!));
-      const invited = invitation && (await pool.query(
-        `SELECT 1 FROM invitations WHERE token_digest = $1 AND email = $2 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at > now()`,
-        [digest(`invite:${invitation}`), email])).rowCount;
-      if (!invited) return failure(reply, 403, 'invitation_required');
-    }
-    const rawPassword = submitted && submitted.length >= 2 && submitted[1] !== undefined && !/^[\w-]{43}$/.test(submitted[1]) ? submitted[1] : undefined;
+    const invitation = withPassword?.[2] ?? withCode?.[1];
+    const invitationDigest = invitation && /^[\w-]{43}$/.test(invitation) ? digest(`invite:${invitation}`) : null;
+    const refused = await registrationRefusal(pool, email, invitationDigest);
+    if (refused) return failure(reply, 403, refused);
+    const rawPassword = withPassword?.[1];
     let hash: string | null = null;
     if (rawPassword !== undefined) {
       try { hash = await passwordHash(rawPassword, email); }
       catch (error) { return failure(reply, 400, passwordFailure(error)); }
     }
-    if (testenvSignup || !await mailer.codes()) {
-      if (!hash) {
-        try { hash = await passwordHash('', email); }
-        catch (error) { return failure(reply, 400, passwordFailure(error)); }
-      }
+    if (!passwordless) {
       const created = await transaction(pool, async (db) => {
-        const id = await insertAccount(db, email, hash, false);
-        if (!id) return undefined;
+        const account = await registerNewAccount(db, email, hash, false, invitationDigest);
+        if (account.error) return { error: account.error };
+        const { id } = account;
         await audit(db, testenvSignup ? 'account.testenv_registered' : 'account.registered', id, id);
         return { token: await web.issue(db, id, 0, request), body: { created: true, emailVerified: false, ...await continuation(db, request, id) } };
       });
-      if (!created) return failure(reply, 409, 'email_in_use');
+      if (created.error) return failure(reply, created.error === 'email_in_use' ? 409 : 403, created.error);
       web.grant(reply, created.token);
       return reply.code(201).send(created.body);
     }
@@ -135,10 +120,11 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     const code = verificationCode();
     await pool.query('DELETE FROM email_registrations WHERE expires_at <= now()');
     await pool.query(`INSERT INTO email_registrations
-      (token_digest, email, expires_at, enrollment_digest, password_hash, next_resend_at, intent_digest)
+      (token_digest, email, expires_at, enrollment_digest, password_hash, next_resend_at, intent_digest, invitation_digest)
       VALUES ($1, $2, now() + $3 * interval '1 second', $4, $5, now() + $6 * interval '1 second',
-        (SELECT token_digest FROM registration_intents WHERE token_digest = $7 AND expires_at > now() AND account_id IS NULL))`,
-    [codeKey(enrollment, code), email, enrollmentSeconds, web.keyFor(enrollment), hash, resendSeconds, intentDigest(request, realm) ?? null]);
+        (SELECT token_digest FROM registration_intents WHERE token_digest = $7 AND expires_at > now() AND account_id IS NULL), $8)`,
+    [codeKey(enrollment, code), email, enrollmentSeconds, web.keyFor(enrollment), hash, resendSeconds,
+      intentDigest(request, realm) ?? null, invitationDigest]);
     const language = mailLanguage(request);
     mailer.later(async () => {
       if (await getLogin(pool, email)) {
@@ -159,15 +145,17 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
   });
 
   app.post('/account/resend', guard, async (request, reply) => {
-    if (!await mailer.codes()) return failure(reply, 503, 'registration_unavailable');
+    if (!registrationEnabled || !await mailer.codes()) return failure(reply, 503, 'registration_unavailable');
     if (!fields(request)) return failure(reply, 400, 'unexpected_body');
     const enrollment = readBrowserCookie(request, enrollmentCookie);
     if (!enrollment) return failure(reply, 404, 'enrollment_expired');
     const key = web.keyFor(enrollment);
-    const current = (await pool.query<{ email: string }>(
-      'SELECT email FROM email_registrations WHERE enrollment_digest = $1 AND expires_at > now()', [key])).rows[0];
+    const current = (await pool.query<{ email: string; invitation_digest: string | null }>(
+      'SELECT email, invitation_digest FROM email_registrations WHERE enrollment_digest = $1 AND expires_at > now()', [key])).rows[0];
     if (!current) return failure(reply, 404, 'enrollment_expired');
     const { email } = current;
+    const refused = await registrationRefusal(pool, email, current.invitation_digest);
+    if (refused) return failure(reply, 403, refused);
     if (!await loginRateAllowed(pool, request.ip, email, 'register', 5)) return failure(reply, 429, 'try_later');
     const code = verificationCode();
     const changed = await pool.query(
@@ -183,6 +171,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
   });
 
   app.post('/account/verify', guard, async (request, reply) => {
+    if (!registrationEnabled) return failure(reply, 503, 'registration_unavailable');
     const submitted = fields(request, 'email', 'code');
     let email: string;
     try { email = mailAddress(submitted?.[0] ?? ''); }
@@ -193,13 +182,14 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     if (!await loginRateAllowed(pool, request.ip, email, 'verify', 12) ||
       !await rateAllowed(pool, [[`verify-day:address:${email}`, 30, 86_400]])) return failure(reply, 429, 'try_later');
     const created = await transaction(pool, async (db) => {
-      const attempt = (await db.query<{ password_hash: string; intent_digest: string | null }>(
+      const attempt = (await db.query<{ password_hash: string | null; intent_digest: string | null; invitation_digest: string | null }>(
         `DELETE FROM email_registrations WHERE email = $1 AND token_digest = $2 AND enrollment_digest = $3
-          AND expires_at > now() AND password_hash IS NOT NULL AND attempts < $4 RETURNING password_hash, intent_digest`,
+          AND expires_at > now() AND attempts < $4 RETURNING password_hash, intent_digest, invitation_digest`,
         [email, codeKey(enrollment, code), web.keyFor(enrollment), codeAttempts])).rows[0];
       if (!attempt) return undefined;
-      const id = await insertAccount(db, email, attempt.password_hash, true);
-      if (!id) return undefined;
+      const account = await registerNewAccount(db, email, attempt.password_hash, true, attempt.invitation_digest);
+      if (account.error) return account.error === 'email_in_use' ? undefined : { error: account.error };
+      const { id } = account;
       await audit(db, 'account.email_registered', id, id);
       return { token: await web.issue(db, id, 0, request), body: { created: true, ...await continuation(db, request, id, attempt.intent_digest) } };
     });
@@ -209,6 +199,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       return failure(reply, 400, 'invalid_code');
     }
     setBrowserCookie(reply, enrollmentCookie, '', 0);
+    if (created.error) return failure(reply, 403, created.error);
     web.grant(reply, created.token);
     return reply.code(201).send(created.body);
   });
@@ -220,7 +211,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     catch { return failure(reply, 400, 'invalid_email'); }
     if (!await loginRateAllowed(pool, request.ip, email)) return failure(reply, 429, 'try_later');
     const account = await getLogin(pool, email);
-    const authentic = await verifyPassword(submitted?.[1] ?? '', account?.password_hash ?? backupHash);
+    const authentic = await verifyAccountPassword(submitted?.[1] ?? '', account?.password_hash, backupHash);
     if (!account?.enabled || !authentic) {
       await audit(pool, 'account.sign_in_failed', account?.id ?? 'unknown', account?.id);
       return failure(reply, 401, 'invalid_credentials');
@@ -299,7 +290,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     if (!password) return failure(reply, 400, 'invalid_request');
     if (!await loginRateAllowed(pool, request.ip, viewer.email, 'revoke-app', 5)) return failure(reply, 429, 'try_later');
     const account = await getLogin(pool, viewer.email);
-    const authentic = await verifyPassword(password, account?.password_hash ?? backupHash);
+    const authentic = await verifyAccountPassword(password, account?.password_hash, backupHash);
     if (!authentic || !account?.enabled || account.id !== viewer.id) return failure(reply, 403, 'incorrect_password');
     const client = request.params.id;
     const result = await transaction(pool, async (db) => {

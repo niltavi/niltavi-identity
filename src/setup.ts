@@ -2,8 +2,8 @@ import { randomBytes, randomInt } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import { digest } from './browser-cookie.js';
-import { PasswordRejected, passwordHash, verifyPassword } from './credentials.js';
-import { audit, getLogin, getSetting, insertAccount, rateAllowed, setSetting, transaction } from './database.js';
+import { PasswordRejected, passwordHash, verifyAccountPassword } from './credentials.js';
+import { audit, getLogin, getSetting, insertAccount, lockInstanceAdministration, rateAllowed, setSetting, transaction } from './database.js';
 import type { Queryable } from './database.js';
 import { mailAddress, messages, smtpInput } from './mail.js';
 import type { Mailer } from './mail.js';
@@ -17,9 +17,12 @@ const linkSeconds = 3_600;
 // The instance owner opens this link once to create the first administrator and choose
 // how the instance sends mail. Print it only on the operator's terminal.
 export async function issueSetupLink(pool: Pool, issuer: string) {
-  if (await getSetting<boolean>(pool, 'initialized')) throw new Error('This instance is already initialized.');
   const token = randomBytes(32).toString('base64url');
-  await setSetting(pool, 'setup_link', { digest: digest(`setup:${token}`), expires: Date.now() + linkSeconds * 1_000 } satisfies SetupLink);
+  await transaction(pool, async (db) => {
+    await lockInstanceAdministration(db);
+    if (await getSetting<boolean>(db, 'initialized')) throw new Error('This instance is already initialized.');
+    await setSetting(db, 'setup_link', { digest: digest(`setup:${token}`), expires: Date.now() + linkSeconds * 1_000 } satisfies SetupLink);
+  });
   return { link: `${new URL(issuer).origin}/setup#${token}`, expiresInSeconds: linkSeconds };
 }
 
@@ -55,14 +58,19 @@ export async function confirmMailTest(pool: Pool, mailer: Mailer, code: string, 
 
 export { mailFields };
 
+async function validSetupLink(db: Queryable, token: string | undefined) {
+  if (!token) return false;
+  const link = await getSetting<SetupLink>(db, 'setup_link');
+  return Boolean(link && link.expires >= Date.now() && link.digest === digest(`setup:${token}`) &&
+    !await getSetting<boolean>(db, 'initialized'));
+}
+
 export function registerSetup(app: FastifyInstance, pool: Pool, web: WebSessions, mailer: Mailer, backupHash: string) {
   const guard = { preHandler: web.origin };
 
   async function permitted(request: FastifyRequest, reply: FastifyReply, token: string | undefined) {
     if (!await rateAllowed(pool, [[`setup:source:${request.ip}`, 30]])) { await failure(reply, 429, 'try_later'); return false; }
-    const link = await getSetting<SetupLink>(pool, 'setup_link');
-    if (!token || !link || link.expires < Date.now() || link.digest !== digest(`setup:${token}`) ||
-      await getSetting<boolean>(pool, 'initialized')) { await failure(reply, 403, 'setup_link_invalid'); return false; }
+    if (!await validSetupLink(pool, token)) { await failure(reply, 403, 'setup_link_invalid'); return false; }
     return true;
   }
   const owner = async () => (await pool.query<{ id: string; email: string }>(
@@ -82,23 +90,26 @@ export function registerSetup(app: FastifyInstance, pool: Pool, web: WebSessions
     catch { return failure(reply, 400, 'invalid_email'); }
     const existing = await getLogin(pool, email);
     // An address that already has an account becomes the owner only with that account's password.
-    if (!await verifyPassword(password ?? '', existing?.password_hash ?? backupHash) && existing) return failure(reply, 401, 'invalid_credentials');
+    if (!await verifyAccountPassword(password ?? '', existing?.password_hash, backupHash) && existing) return failure(reply, 401, 'invalid_credentials');
     let hash = '';
     if (!existing) {
       try { hash = await passwordHash(password ?? '', email); }
       catch (error) { return failure(reply, 400, error instanceof PasswordRejected ? error.code : 'invalid_password'); }
     }
     const session = await transaction(pool, async (db) => {
-      await db.query('SELECT pg_advisory_xact_lock(2026112402)');
+      await lockInstanceAdministration(db);
+      if (!await validSetupLink(db, token)) return false;
       if ((await db.query("SELECT 1 FROM accounts WHERE instance_role = 'owner'")).rowCount) return undefined;
       const id = existing?.id ?? await insertAccount(db, email, hash, false);
       if (!id) return undefined;
       const account = (await db.query<{ security_epoch: number }>(
-        "UPDATE accounts SET instance_role = 'owner' WHERE id = $1 AND enabled RETURNING security_epoch", [id])).rows[0];
+        `UPDATE accounts SET instance_role = 'owner' WHERE id = $1 AND enabled AND deleted_at IS NULL
+           AND ($2::int IS NULL OR security_epoch = $2) RETURNING security_epoch`, [id, existing?.security_epoch ?? null])).rows[0];
       if (!account) return undefined;
       await audit(db, 'instance.admin_granted', id, id, 'owner');
       return web.issue(db, id, account.security_epoch, request);
     });
+    if (session === false) return failure(reply, 403, 'setup_link_invalid');
     if (!session) return failure(reply, 409, 'owner_exists');
     web.grant(reply, session);
     return reply.code(201).send({ step: 'mail' });
@@ -126,13 +137,14 @@ export function registerSetup(app: FastifyInstance, pool: Pool, web: WebSessions
 
   // Finishing with no confirmed mail settings is the documented way to run without outgoing mail.
   app.post('/setup/finish', guard, async (request, reply) => {
-    if (!await permitted(request, reply, fields(request, 'token')?.[0])) return reply;
+    const [token] = fields(request, 'token') ?? [];
+    if (!await permitted(request, reply, token)) return reply;
     const viewer = await web.viewer(request);
     const current = await owner();
     if (!viewer || !current || viewer.id !== current.id) return failure(reply, 403, 'setup_owner_required');
     const finished = await transaction(pool, async (db) => {
-      await db.query('SELECT pg_advisory_xact_lock(2026112402)');
-      if (await getSetting<boolean>(db, 'initialized')) return false;
+      await lockInstanceAdministration(db);
+      if (!await validSetupLink(db, token)) return false;
       await setSetting(db, 'initialized', true);
       await setSetting(db, 'setup_link', undefined);
       await setSetting(db, 'smtp_pending', undefined);
