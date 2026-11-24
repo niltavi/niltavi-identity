@@ -58,6 +58,11 @@ export async function verifyPassword(password: string, stored: string) {
   return timingSafeEqual(await derive(password, Buffer.from(salt, 'base64url')), expected);
 }
 
+export async function verifyAccountPassword(password: string, stored: string | null | undefined, timingHash: string) {
+  const matches = await verifyPassword(password, stored ?? timingHash);
+  return stored != null && matches;
+}
+
 export function sealClientSecret(clientId: string, secret: string, key: Buffer) {
   const nonce = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, nonce);

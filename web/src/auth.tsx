@@ -174,12 +174,11 @@ export function Register() {
   if (!settings || invited === undefined) return <Lines />;
   if (!settings.registrationAvailable) {
     return <Narrow title={t('Create an account', '创建账号')}>
-      <Notice status="default">{settings.initialized ? t('Registration is not open on this instance.', '此实例未开放注册。')
-        : t('This instance is not set up yet. Its administrator needs to finish setup first.', '此实例尚未完成初始化，需要管理员先完成设置。')}</Notice>
+      <Notice status="default">{t('Registration is not open on this instance.', '此实例未开放注册。')}</Notice>
       {signIn}
     </Narrow>;
   }
-  const inviteOnly = settings.registrationPolicy === 'invite' && mode !== 'unverified-testenv';
+  const inviteOnly = settings.registrationPolicy === 'invite';
   if (inviteOnly && !invited) {
     return <Narrow title={t('Create an account', '创建账号')}>
       <Notice status="default">{t('This instance is invite-only. Open the invitation link you received to create an account.',
@@ -202,7 +201,9 @@ export function Register() {
             await autoAcceptInvitation();
             await refresh();
           } catch (failure) {
-            if (codeOf(failure) !== 'invalid_code') throw failure;
+            const code = codeOf(failure);
+            if (code === 'registration_unavailable' || code === 'invitation_required') setVerifying(undefined);
+            if (code !== 'invalid_code') throw failure;
             setCodeError(problem(failure, language));
           }
         });
@@ -236,7 +237,7 @@ export function Register() {
         void task.run('register', async () => {
           try {
             const result = await call<{ created?: true; continueTo?: string }>('/account/register',
-              { email, ...(inviteOnly && invitation ? { invitation } : {}) });
+              { email, ...(invited && invitation ? { invitation } : {}) });
             if (result.created) await finish(result.continueTo);
             else setVerifying(email);
           } catch (failure) {
@@ -264,7 +265,7 @@ export function Register() {
     onSubmit={async (email, password) => {
       try {
         const result = await call<{ created?: true; continueTo?: string }>('/account/register',
-          { email, password, ...(inviteOnly && invitation ? { invitation } : {}) });
+          { email, password, ...(invited && invitation ? { invitation } : {}) });
         if (result.created) await finish(result.continueTo);
         else setVerifying(email);
       } catch (failure) {

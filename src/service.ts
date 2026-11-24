@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:https';
 import type { Server as HttpsServer } from 'node:https';
@@ -18,7 +18,7 @@ import { protocolPageCsp, registerBrowserPage } from './browser-page.js';
 import type { ProtocolOptions, ProtocolView } from './browser-page.js';
 import { assertSchema, audit, getLogin, loginRateAllowed, transaction } from './database.js';
 import type { Application } from './database.js';
-import { normalizeEmail, openClientSecret, passwordHash, verifyPassword } from './credentials.js';
+import { normalizeEmail, openClientSecret, passwordHash, verifyAccountPassword } from './credentials.js';
 import { createMailer } from './mail.js';
 import { createNotifier } from './notify.js';
 import { createProtocolStore } from './protocol-store.js';
@@ -26,6 +26,7 @@ import { registerSetup } from './setup.js';
 import { orgsFor, registerTeams } from './teams.js';
 import { createWebSessions } from './web-session.js';
 import { beginRegistrationIntent, intentDigest, oidcInteractionSeconds, validInteractionUid } from './registration-intent.js';
+import { registrationPolicy } from './registration.js';
 import { httpsUrl, loadKeyRing, loadSecretEncryptionKey, required, secretDirectory } from './settings.js';
 import { identityTls, watchTls } from './tls.js';
 import type { IdentityTls } from './tls.js';
@@ -111,7 +112,7 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     loadKeyRing(directory),
     loadSecretEncryptionKey(directory),
     readFile(join(directory, 'cookies.key'), 'utf8'),
-    passwordHash('unused password for timing comparison'),
+    passwordHash(randomBytes(32).toString('base64url')),
   ]);
   if (Buffer.from(cookieKey.trim(), 'base64url').length < 32) throw new Error('The cookie signing key is too short.');
   const signing = ring.keys[0];
@@ -157,9 +158,10 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
   async function loginOptions(request: FastifyRequest, details: Details): Promise<ProtocolOptions> {
     const language = preferred(request, details.params.ui_locales);
     const requester = typeof details.params.client_id === 'string' ? await registered(details.params.client_id) : undefined;
+    const canRegister = registrationEnabled && validInteractionUid(details.uid) && await registrationPolicy(pool) !== 'closed';
     return {
       language, appName: requester?.name, appUrl: requester?.home_url, recover: localPath(language, '/recover'),
-      registration: registrationEnabled && validInteractionUid(details.uid) ? '/interaction/' + details.uid + '/register' : undefined,
+      registration: canRegister ? '/interaction/' + details.uid + '/register' : undefined,
     };
   }
   async function sendLogin(request: FastifyRequest, reply: FastifyReply, details: Details, status = 200) {
@@ -390,7 +392,7 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     catch { return sendLogin(request, reply, details, 400); }
     if (!await loginRateAllowed(pool, request.ip, email)) return sendLogin(request, reply.header('retry-after', '60'), details, 429);
     const account = await getLogin(pool, email);
-    const authentic = await verifyPassword(body.get('password') ?? '', account?.password_hash ?? backupHash);
+    const authentic = await verifyAccountPassword(body.get('password') ?? '', account?.password_hash, backupHash);
     if (!account?.enabled || !authentic || !store.remember(account.id, account.security_epoch) || !await store.isEnabled(account.id)) {
       await audit(pool, 'account.sign_in_failed', account?.id ?? 'unknown', account?.id);
       return sendLogin(request, reply, details, 401);

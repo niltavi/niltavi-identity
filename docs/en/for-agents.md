@@ -22,15 +22,17 @@ Compose waits for PostgreSQL and applies the schema migrations before starting I
 
 ## Initialize the instance
 
-Print a one-time setup link and give it to the instance owner. The link is valid for one hour.
+On a fresh instance, open `/register` and create the owner's account. The first completed registration becomes the instance owner. Keep the instance behind a private listener or ingress until the intended owner has registered. With mail delivery already configured, registration completes when the owner confirms the email code.
+
+The owner can sign in and open `/admin` immediately. To change instance settings, first enable and confirm a second factor under **Account → Security**. Use the instance console to configure outgoing mail and choose whether registration is open, invite-only, or closed.
+
+The optional setup wizard creates the owner and lets them test SMTP in the same flow. To use it, print a one-time link and give it to the owner. The link is valid for one hour.
 
 ```sh
 docker compose -p niltavi-identity -f compose.service.yaml exec -T identity node dist/cli.js setup link
 ```
 
-The owner opens the link, creates the first administrator account, and configures outgoing mail in the browser. The owner types the SMTP settings personally and confirms them with the code from a test message. Do not fill in or store mail credentials on the owner's behalf. The owner may skip the mail step. The instance then runs without outgoing mail: registration does not verify addresses, and an administrator issues password reset links. See the [contract](authentication.md#without-outgoing-mail).
-
-After setup the owner enables a second factor under **Account → Security**. The instance console at `/admin` is read-only until then.
+The owner enters their SMTP credentials and confirms the code from a test message. They can also skip SMTP. Without outgoing mail, registration uses a password and an administrator issues password reset links. See the [contract](authentication.md#without-outgoing-mail).
 
 For an unattended install, create the owner from the command line. Pass the password over stdin from a file protected by the operator.
 

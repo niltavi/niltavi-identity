@@ -7,7 +7,7 @@ import Person from '@gravity-ui/icons/Person';
 import Persons from '@gravity-ui/icons/Persons';
 import { useState } from 'react';
 import { RequestFailure, call, codeOf, problem } from './api';
-import type { MailStatus } from './api';
+import type { MailStatus, RegistrationPolicy } from './api';
 import { container } from './site';
 import type { Route } from './site';
 import { MailSetup } from './setup';
@@ -16,7 +16,7 @@ import { Choice, CodeField, ConfirmButton, Empty, Loaded, Notice, PageLink, Pane
 
 type Overview = {
   counts: { accounts: number; teams: number; applications: number; deletionRequests: number };
-  mail: MailStatus; registration: 'open' | 'invite'; canWrite: boolean; secondFactorEnabled: boolean; role: 'owner' | 'admin';
+  mail: MailStatus; registration: RegistrationPolicy; canWrite: boolean; secondFactorEnabled: boolean; role: 'owner' | 'admin';
 };
 type Console = { overview: Overview; reload: () => Promise<void> };
 
@@ -88,21 +88,29 @@ function Summary({ console: { overview, reload } }: { console: Console }) {
     [t('Accounts', '账号'), overview.counts.accounts], [t('Teams', '团队'), overview.counts.teams],
     [t('Applications', '应用'), overview.counts.applications], [t('Deletion requests', '删除申请'), overview.counts.deletionRequests],
   ] as const;
+  const registrationDescription = {
+    open: t('Anyone can create an account.', '任何人都可以创建账号。'),
+    invite: t('Only people with a team invitation can create an account.', '只有收到团队邀请的人可以创建账号。'),
+    closed: t('New account registration is closed.', '已关闭新账号注册。'),
+  };
   return <>
     <Panel title={t('This instance', '实例概况')} aside={<State>{overview.role === 'owner' ? t('You are the owner', '你是所有者') : t('You are an administrator', '你是管理员')}</State>}>
       <dl className="grid grid-cols-2 gap-4 md:grid-cols-4">
         {counts.map(([label, value]) => <div key={label}><dt className="text-sm text-muted">{label}</dt><dd className="text-2xl font-semibold tabular-nums">{value}</dd></div>)}
       </dl>
     </Panel>
-    <Panel title={t('Registration', '注册')} description={overview.registration === 'open'
-      ? t('Anyone can create an account.', '任何人都可以创建账号。') : t('Only people with a team invitation can create an account.', '只有收到团队邀请的人可以创建账号。')}>
+    <Panel title={t('Registration', '注册')} description={registrationDescription[overview.registration]}>
       <TaskFeedback task={task} />
       <Choice className="w-full max-w-xs" label={t('Who can register', '谁可以注册')} value={overview.registration} isDisabled={!overview.canWrite}
         onChange={policy => void task.run('policy', async () => {
           await call('/admin/api/registration', { policy });
           await reload();
           return t('Registration setting saved.', '注册设置已保存。');
-        })} options={[{ id: 'open', label: t('Open to everyone', '对所有人开放') }, { id: 'invite', label: t('Invite-only', '仅限受邀') }]} />
+        })} options={[
+          { id: 'open', label: t('Open to everyone', '对所有人开放') },
+          { id: 'invite', label: t('Invite-only', '仅限受邀') },
+          { id: 'closed', label: t('Closed', '关闭注册') },
+        ]} />
     </Panel>
   </>;
 }

@@ -1,13 +1,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
-import { registrationPolicy } from './browser-auth.js';
 import {
-  applyAccountEnabled, audit, getSetting, markEmailVerified, operatorResetLink, registerApplication, rotateApplicationSecret,
+  applyAccountEnabled, audit, getSetting, lockInstanceAdministration, markEmailVerified, operatorResetLink, registerApplication, rotateApplicationSecret,
   setApplicationEnabled, setInstanceRole, setSetting, standardApplication, transaction,
 } from './database.js';
 import { PasswordRejected, passwordHash, passwordProblem } from './credentials.js';
 import type { Mailer } from './mail.js';
 import type { Notifier } from './notify.js';
+import { registrationPolicy } from './registration.js';
 import { beginMailTest, confirmMailTest, mailFields } from './setup.js';
 import { leaveAllTeams } from './teams.js';
 import { failure, fields, requestLanguage } from './web-session.js';
@@ -238,11 +238,13 @@ export function registerAdmin(app: FastifyInstance, pool: Pool, issuer: URL, web
     const viewer = await writer(request, reply);
     if (!viewer) return reply;
     const [policy] = fields(request, 'policy') ?? [];
-    if (policy !== 'open' && policy !== 'invite') return failure(reply, 400, 'invalid_policy');
-    if (await getSetting(pool, 'registration') !== policy) {
-      await setSetting(pool, 'registration', policy);
-      await audit(pool, 'instance.registration_changed', policy, viewer.id);
-    }
+    if (policy !== 'open' && policy !== 'invite' && policy !== 'closed') return failure(reply, 400, 'invalid_policy');
+    await transaction(pool, async (db) => {
+      await lockInstanceAdministration(db);
+      if (await registrationPolicy(db) === policy) return;
+      await setSetting(db, 'registration', policy);
+      await audit(db, 'instance.registration_changed', policy, viewer.id);
+    });
     return { registration: policy };
   });
 

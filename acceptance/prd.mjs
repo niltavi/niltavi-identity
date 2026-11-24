@@ -10,9 +10,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLocalJWKSet, decodeJwt, decodeProtectedHeader, jwtVerify } from 'jose';
 import selfsigned from 'selfsigned';
-import { totpCode } from '../dist/credentials.js';
+import { passwordHash, totpCode, verifyAccountPassword } from '../dist/credentials.js';
 import {
-  connect, createAccount, getAccount, markEmailVerified, migrate, operatorResetLink, schemaVersion, setAccountEnabled,
+  connect, createAccount, getAccount, markEmailVerified, migrate, operatorResetLink, schemaVersion, setAccountEnabled, setSetting,
 } from '../dist/database.js';
 import { createProtocolStore } from '../dist/protocol-store.js';
 import { activateKey, initializeSecrets, retireKey, stageKey } from '../dist/settings.js';
@@ -28,10 +28,12 @@ const pool = connect(db.href);
 const files = await mkdtemp(join(tmpdir(), 'identity-prd-'));
 const port = process.env.IDENTITY_PRD_TEST_PORT ?? '43910';
 const issuer = `https://identity.localhost:${port}`;
+const hostedIssuer = `https://identity.acceptance.niltavi.com:${port}`;
 const cert = await selfsigned.generate([{ name: 'commonName', value: 'identity.localhost' }], {
   algorithm: 'sha256',
   extensions: [{ name: 'basicConstraints', cA: false }, { name: 'extKeyUsage', serverAuth: true },
-    { name: 'subjectAltName', altNames: [{ type: 2, value: 'identity.localhost' }, { type: 7, ip: '127.0.0.1' }] }],
+    { name: 'subjectAltName', altNames: [{ type: 2, value: 'identity.localhost' },
+      { type: 2, value: new URL(hostedIssuer).hostname }, { type: 7, ip: '127.0.0.1' }] }],
 });
 
 // A loopback mail relay that keeps what it receives.
@@ -92,12 +94,13 @@ for (const stream of [process.stdout, process.stderr]) {
 const secrets = new Set();
 const secret = (value) => { secrets.add(value); return value; };
 
-function http(method, path, { body, form, cookie, headers = {}, server = false } = {}) {
+function http(method, path, { body, form, cookie, headers = {}, server = false, origin = issuer } = {}) {
   return new Promise((resolve, reject) => {
     const data = form ? new URLSearchParams(form).toString() : body === undefined ? undefined : JSON.stringify(body);
-    const req = request({ hostname: '127.0.0.1', servername: 'identity.localhost', port, ca: cert.cert, method, path,
-      headers: { host: new URL(issuer).host, ...(cookie ? { cookie } : {}), ...(data === undefined ? {} : {
-        ...(server ? {} : { origin: issuer }), 'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json', 'content-length': Buffer.byteLength(data),
+    const target = new URL(origin);
+    const req = request({ hostname: '127.0.0.1', servername: target.hostname, port, ca: cert.cert, method, path,
+      headers: { host: target.host, ...(cookie ? { cookie } : {}), ...(data === undefined ? {} : {
+        ...(server ? {} : { origin }), 'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json', 'content-length': Buffer.byteLength(data),
       }), ...headers },
     }, async (response) => {
       try {
@@ -115,11 +118,11 @@ function http(method, path, { body, form, cookie, headers = {}, server = false }
 }
 
 // One cookie jar is one browser.
-function browser() {
+function browser(origin = issuer) {
   const jar = new Map();
   const send = async (method, path, options = {}) => {
     const cookie = [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
-    const result = await http(method, path, { ...options, ...(cookie ? { cookie } : {}) });
+    const result = await http(method, path, { origin, ...options, ...(cookie ? { cookie } : {}) });
     for (const entry of result.cookies) {
       const [pair] = entry.split(';', 1);
       const at = pair.indexOf('=');
@@ -169,30 +172,78 @@ function flow(app, session = browser(), extra = {}) {
 
 let app;
 try {
-  await dbAdmin.query(`CREATE SCHEMA "${schema}"`);
   await initializeSecrets(process.env.IDENTITY_SECRETS_DIR);
+  const hostedSchema = `${schema}_hosted`;
+  const hostedDb = new URL(db);
+  hostedDb.searchParams.set('options', `-c search_path=${hostedSchema}`);
+  const hostedPool = connect(hostedDb.href);
+  let hosted;
+  try {
+    const timingPassword = randomBytes(32).toString('base64url');
+    assert.equal(await verifyAccountPassword(timingPassword, null, await passwordHash(timingPassword)), false);
+    await dbAdmin.query(`CREATE SCHEMA "${hostedSchema}"`);
+    await migrate(hostedPool);
+    await setSetting(hostedPool, 'smtp', {
+      host: '127.0.0.1', port: smtp.address().port, security: 'none', username: '', password: null, from: 'identity@example.test',
+    });
+    process.env.IDENTITY_ISSUER = hostedIssuer;
+    process.env.IDENTITY_DEPLOYMENT_PROFILE = 'hosted';
+    hosted = await service(hostedPool);
+    const candidates = ['personal@example.test', 'work@example.org'].map(email => ({ email, session: browser(hostedIssuer) }));
+    const config = (await candidates[0].session.get('/account/config')).body;
+    assert.deepEqual([config.initialized, config.registrationAvailable, config.registrationPolicy], [false, true, 'open']);
+    await Promise.all(candidates.map(async candidate => {
+      assert.equal((await candidate.session.post('/account/register', { email: candidate.email })).status, 202);
+      [, candidate.code] = await mail(candidate.email, /^(\d{6})$/m);
+    }));
+    assert.equal((await hostedPool.query('SELECT id FROM accounts')).rowCount, 0);
+    const opened = await Promise.all(candidates.map(async ({ session, email, code }) => {
+      assert.equal((await session.post('/account/verify', { email, code })).status, 201);
+      const { account } = (await session.get('/account/session')).body;
+      assert.equal(account.emailVerified, true);
+      return account.instanceRole;
+    }));
+    assert.equal(opened.filter(role => role === 'owner').length, 1);
+    assert.equal(opened.filter(role => role === null).length, 1);
+    for (const { email } of candidates) {
+      assert.equal((await browser(hostedIssuer).post('/account/login', { email, password })).status, 401);
+    }
+    passed('hosted signup starts open and concurrent email confirmations grant ownership to exactly one account');
+  } finally {
+    await hosted?.close();
+    await hostedPool.end();
+    await dbAdmin.query(`DROP SCHEMA IF EXISTS "${hostedSchema}" CASCADE`);
+    process.env.IDENTITY_ISSUER = issuer;
+    process.env.IDENTITY_DEPLOYMENT_PROFILE = 'self-hosted';
+  }
+
+  await dbAdmin.query(`CREATE SCHEMA "${schema}"`);
   assert.deepEqual(await migrate(pool), { version: schemaVersion, changed: true });
   app = await service(pool);
 
   // ── First run, without outgoing mail ─────────────────────────────────────────────
-  const ownerEmail = 'owner@example.test';
   const ownerPassword = secret(`owner secret ${randomBytes(6).toString('hex')}`);
-  assert.equal((await http('GET', '/account/config')).body.initialized, false);
-  assert.equal((await browser().post('/account/register', { email: 'early@example.test', password })).status, 503);
+  const initial = (await http('GET', '/account/config')).body;
+  assert.deepEqual([initial.initialized, initial.registrationAvailable, initial.registrationPolicy], [false, true, 'open']);
   const setupToken = secret((await issueSetupLink(pool, issuer)).link.split('#')[1]);
-  const owner = browser();
-  assert.equal((await owner.post('/setup/state', { token: 'x'.repeat(43) })).status, 403);
-  assert.equal((await owner.post('/setup/state', { token: setupToken })).body.step, 'owner');
-  assert.equal((await owner.post('/setup/owner', { token: setupToken, email: ownerEmail, password: 'elevenchars' })).body.error, 'invalid_password');
-  assert.equal((await owner.post('/setup/owner', { token: setupToken, email: ownerEmail, password: 'qwerty123456' })).body.error, 'common_password');
-  assert.equal((await owner.post('/setup/owner', { token: setupToken, email: ownerEmail, password: ownerPassword })).status, 201);
-  assert.equal((await browser().post('/setup/owner', { token: setupToken, email: 'second@example.test', password })).status, 409);
-  const finishing = await Promise.all([1, 2].map(() => owner.post('/setup/finish', { token: setupToken })));
-  assert.deepEqual(finishing.map(({ status }) => status).sort(), [200, 403]);
-  assert.equal(finishing.find(({ status }) => status === 200).body.mail, 'none');
-  assert.equal((await owner.get('/account/session')).body.account.emailVerified, false);
-  assert.equal((await owner.post('/setup/state', { token: setupToken })).status, 403);
-  passed('first-run setup creates one owner, can skip outgoing mail, and its link stops working afterwards');
+  assert.equal((await browser().post('/account/register',
+    { email: 'forged@example.test', password, instanceRole: 'owner' })).status, 400);
+  const candidates = await Promise.all(['first@example.test', 'second@example.test'].map(async email => {
+    const session = browser();
+    assert.equal((await session.post('/account/register', { email, password: ownerPassword })).status, 201);
+    const { account } = (await session.get('/account/session')).body;
+    assert.equal(account.emailVerified, false);
+    return { session, email, role: account.instanceRole };
+  }));
+  assert.equal(candidates.filter(({ role }) => role === 'owner').length, 1);
+  const { session: owner, email: ownerEmail } = candidates.find(({ role }) => role === 'owner');
+  const regular = candidates.find(({ role }) => role === null).session;
+  assert.equal((await owner.get('/admin/api/overview')).body.role, 'owner');
+  assert.equal((await regular.post('/admin/api/registration', { policy: 'closed' })).body.error, 'administrator_required');
+  assert.equal((await browser().post('/admin/api/registration', { policy: 'closed' })).status, 401);
+  assert.equal((await regular.post('/setup/owner', { token: setupToken, email: 'third@example.test', password })).status, 403);
+  assert.equal((await http('GET', '/account/config')).body.initialized, true);
+  passed('concurrent first registrations create one owner and one regular account and invalidate the old setup link');
 
   // Password rule: 12 to 256 characters, counted by character, breached passwords refused.
   await clearLimits();
@@ -261,6 +312,7 @@ try {
   const registration = { id: 'app-one', name: 'App One', homeUrl: 'https://app-one.localhost:43921/' };
   assert.equal((await owner.post('/admin/api/applications', registration)).body.error, 'second_factor_not_enabled');
   assert.equal((await owner.post('/admin/api/registration', { policy: 'invite' })).body.error, 'second_factor_not_enabled');
+  assert.equal((await owner.post('/admin/api/registration', { policy: 'closed' })).body.error, 'second_factor_not_enabled');
   const totp = secret((await owner.post('/account/second-factor/setup', {})).body.secret);
   assert.equal((await owner.post('/account/second-factor/enable', { code: '000000' })).status, 400);
   const firstCode = totpCode(totp);
@@ -620,8 +672,14 @@ try {
   const [, mailedInviteToken] = await mail('invited@example.test', /\/invite#([\w-]{43})/, inboxMark);
   assert.equal(mailedInviteToken, mailedInvite.body.link.split('#')[1]);
   secret(mailedInviteToken);
+  const pending = browser();
+  const pendingEmail = 'pending-policy@example.test';
+  await clearLimits();
+  assert.equal((await pending.post('/account/register', { email: pendingEmail })).status, 202);
+  const [, pendingCode] = await mail(pendingEmail, /^(\d{6})$/m);
   assert.equal((await owner.post('/admin/api/registration', { policy: 'invite' })).body.registration, 'invite');
   await clearLimits();
+  assert.equal((await pending.post('/account/verify', { email: pendingEmail, code: pendingCode })).body.error, 'invitation_required');
   assert.equal((await browser().post('/account/register', { email: 'stranger@example.test', password })).body.error, 'invitation_required');
   assert.equal((await browser().post('/account/register', { email: 'stranger@example.test', password, invitation: mailedInviteToken })).body.error, 'invitation_required');
   const invited = browser();
@@ -633,6 +691,22 @@ try {
   assert.equal((await invited.get(`/account/orgs/${team.id}`)).body.org.role, 'admin');
   assert.equal((await owner.post('/admin/api/registration', { policy: 'open' })).status, 200);
   passed('one invitation: a new address registers, verifies and joins the team; invite-only instances refuse everyone else');
+
+  const closing = browser();
+  const closingEmail = 'pending-close@example.test';
+  await clearLimits();
+  assert.equal((await closing.post('/account/register', { email: closingEmail })).status, 202);
+  const [, closingCode] = await mail(closingEmail, /^(\d{6})$/m);
+  assert.equal((await owner.post('/admin/api/registration', { policy: 'closed' })).body.registration, 'closed');
+  assert.equal((await closing.get('/account/config')).body.registrationAvailable, false);
+  assert.equal((await closing.post('/account/resend')).body.error, 'registration_unavailable');
+  assert.equal((await closing.post('/account/verify', { email: closingEmail, code: closingCode })).body.error, 'registration_unavailable');
+  assert.equal((await browser().post('/account/register', { email: closingEmail })).body.error, 'registration_unavailable');
+  assert.equal((await browser().post('/account/login', { email: ownerEmail, password: ownerPassword })).status, 204);
+  assert.equal((await owner.post('/admin/api/registration', { policy: 'open' })).status, 200);
+  assert.equal((await closing.get('/account/config')).body.registrationAvailable, true);
+  assert.equal((await closing.get('/account/session')).status, 401);
+  passed('an administrator can close registration even for pending codes, and existing accounts can still sign in');
 
   // Account deletion is requested by the user and carried out by an administrator.
   const invitedId = (await invited.get('/account/session')).body.account.id;

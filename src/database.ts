@@ -48,8 +48,13 @@ export async function audit(db: Queryable, action: string, target: string, actor
 }
 
 const migrationFiles = ['schema.sql', 'schema-browser.sql', 'schema-enrollment.sql', 'schema-registration-intents.sql',
-  'schema-teams.sql', 'schema-email-codes.sql'];
+  'schema-teams.sql', 'schema-email-codes.sql', 'schema-registration-policy.sql'];
 export const schemaVersion = migrationFiles.length;
+
+// Serialize first-account ownership, operator provisioning and registration policy changes.
+export async function lockInstanceAdministration(db: PoolClient) {
+  await db.query('SELECT pg_advisory_xact_lock(2026112402)');
+}
 
 export async function getSetting<T>(db: Queryable, key: string) {
   return (await db.query<{ value: T }>('SELECT value FROM instance_settings WHERE key = $1', [key])).rows[0]?.value;
@@ -102,6 +107,7 @@ export async function createAccount(pool: Pool, address: string, password: strin
   const email = normalizeEmail(address);
   const hash = await passwordHash(password, email);
   return transaction(pool, async (db) => {
+    await lockInstanceAdministration(db);
     const id = await insertAccount(db, email, hash, false);
     if (!id) throw new Error('An account already uses this email.');
     await audit(db, 'account.created', id);
@@ -205,7 +211,7 @@ export function loginRateAllowed(pool: Pool, source: string, email: string, purp
 }
 
 export async function getLogin(pool: Pool, email: string) {
-  return (await pool.query<{ id: string; security_epoch: number; enabled: boolean; password_hash: string }>(
+  return (await pool.query<{ id: string; security_epoch: number; enabled: boolean; password_hash: string | null }>(
     'SELECT id, security_epoch, enabled, password_hash FROM accounts WHERE email = $1', [email],
   )).rows[0];
 }
@@ -301,7 +307,7 @@ export async function markEmailVerified(pool: Pool, address: string, actor?: str
 // The first instance administrator becomes the owner, and the instance counts as initialized.
 export async function setInstanceRole(pool: Pool, address: string, grant: boolean, actor?: string) {
   return transaction(pool, async (db) => {
-    await db.query('SELECT pg_advisory_xact_lock(2026112402)');
+    await lockInstanceAdministration(db);
     const account = (await db.query<{ id: string; instance_role: string | null }>(
       'SELECT id, instance_role FROM accounts WHERE email = $1 AND deleted_at IS NULL FOR UPDATE', [normalizeEmail(address)])).rows[0];
     if (!account) throw new Error('Account does not exist.');

@@ -5,10 +5,12 @@ export type Account = {
   instanceRole: 'owner' | 'admin' | null; secondFactorEnabled: boolean; secondFactorVerified: boolean;
   deletionRequested: boolean; signedInAt: string; expiresAt: string; activeSessions: number;
 };
+export type RegistrationPolicy = 'open' | 'invite' | 'closed';
+
 export type Settings = {
   initialized: boolean; registrationAvailable: boolean;
   registrationMode: 'verify-email' | 'unverified-testenv' | 'immediate';
-  registrationPolicy: 'open' | 'invite'; recoveryAvailable: boolean;
+  registrationPolicy: RegistrationPolicy; recoveryAvailable: boolean;
   passwordRule: { minimum: number; maximum: number };
   passwordlessAvailable: boolean;
   registrationDomain?: string;

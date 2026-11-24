@@ -88,9 +88,11 @@ Without outgoing mail:
 
 ## Instance administrators
 
-The first-run setup creates the instance owner. Administrators register applications, manage accounts and change instance settings in the console at `/admin`.
+The first completed self-service registration on a fresh instance creates the instance owner. Later registrations create regular accounts. The operator can also provision the owner through the setup wizard or CLI. Administrators register applications, manage accounts and change instance settings in the console at `/admin`.
 
 An administrator can read the console after signing in. Any change requires a second factor (TOTP) that is enabled on the account and confirmed for the current session. Without it the console is read-only.
+
+Registration starts open. Administrators can restrict it to team invitations or close it. The policy applies when the account is created, including when someone submits an email code issued before a policy change.
 
 Signing keys rotate with an overlap: `identity keys stage` publishes the next key, `identity keys activate <kid>` makes it sign, and the previous key stays published until `identity keys retire <kid>`. Restart the service after each step.
 
@@ -98,6 +100,6 @@ The audit trail records sign-ins and failed sign-ins, password resets, membershi
 
 ## Deployment profiles
 
-- `self-hosted` is the default. The operator chooses whether registration is open or by invitation only.
-- `hosted` requires HTTPS issuers on `niltavi.com` or one of its subdomains, sends verification codes through Tencent SES, and starts as invitation only.
+- `self-hosted` is the default.
+- `hosted` requires HTTPS issuers on `niltavi.com` or one of its subdomains and supports delivery of verification codes through Tencent SES.
 - `acceptance` enables scoped test mailbox domains and scoped account operators for isolated test runs.
