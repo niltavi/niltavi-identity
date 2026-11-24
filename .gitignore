@@ -1,0 +1,13 @@
+node_modules/
+.env
+playwright-report/
+test-results/
+preview/dist/
+web/dist/
+dist/
+.identity/
+/private/
+/runtime/
+/staged-runtime.tar.gz
+/runtime-browser-*/
+/staged-browser-runtime.tar.gz
