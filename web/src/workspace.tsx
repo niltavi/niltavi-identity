@@ -35,7 +35,7 @@ export function Workspace({ route }: { route: Route }) {
   const active = pages.find(({ id }) => id === route.tab) ?? pages[0]!;
   const title = t('Account center', '账号中心');
   return <SidebarLayout title={title} navigation={t('Account navigation', '账号中心导航')}
-    openNavigation={t('Open account navigation', '打开账号中心导航')} section="workspace" pages={pages} activeTab={active.id} account={account}>
+    openNavigation={t('Open account navigation', '打开账号中心导航')} route={route} pages={pages} activeTab={active.id} account={account}>
     {route.accountManagement && <PageLink to={{ section: 'workspace', tab: 'settings' }} className="justify-self-start">
       {t('Back to settings', '返回设置')}
     </PageLink>}

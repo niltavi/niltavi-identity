@@ -73,7 +73,7 @@ export function Admin({ route }: { route: Route }) {
     </Notice>)}
   </div>;
   return <SidebarLayout title={title} navigation={t('Instance console navigation', '实例管理台导航')}
-    openNavigation={t('Open instance console navigation', '打开实例管理台导航')} section="admin" pages={pages} activeTab={tab} account={account}>
+    openNavigation={t('Open instance console navigation', '打开实例管理台导航')} route={route} pages={pages} activeTab={tab} account={account}>
     <h1 className="text-balance text-3xl font-semibold tracking-tight">{title}</h1>
     {banner}
     <Loaded source={overview}>{() => console ? (!tab ? <Summary console={console} /> : tab === 'accounts' ? <Accounts console={console} />
