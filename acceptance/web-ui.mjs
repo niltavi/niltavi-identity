@@ -158,7 +158,8 @@ await journey('setup wizard: owner, mail test, finish', async () => {
   await owner.screenshot({ path: join(shots, 'setup-mail.png'), fullPage: true });
   const sent = Date.now();
   await owner.getByRole('button', { name: 'Send test message' }).click();
-  await owner.getByText(`6-digit code to ${people.owner.email}`).waitFor();
+  await owner.getByRole('status').filter({ hasText: `accepted the test message for ${people.owner.email}` }).waitFor();
+  await owner.getByText('look for a bounce notice in the sender’s mailbox').waitFor();
   await owner.getByLabel('Code from the test message').fill('000000');
   await owner.getByRole('button', { name: 'Confirm and save' }).click();
   await owner.getByText('The code is incorrect or has expired').waitFor();
