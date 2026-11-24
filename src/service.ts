@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:https';
 import type { Server as HttpsServer } from 'node:https';
@@ -288,6 +289,8 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
         }
         return existing;
       }
+      // A fresh grant must not reactivate an application's previous session ID.
+      if (id) session.sidFor(entry.id, randomUUID());
       const grant = new provider.Grant({ clientId: entry.id, accountId: session.accountId });
       grant.addOIDCScope(['openid', ...requested].join(' '));
       grant.addResourceScope(entry.resource, 'read');

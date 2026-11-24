@@ -140,25 +140,29 @@ export function PageLink({ to, children, ...props }: Omit<ComponentProps<typeof 
 export function passwordLength(value: string) { return [...value].length; }
 
 // States the one password rule before anyone types, then counts down to it.
-export function PasswordField({ label, error, rule, onInput, autoFocus }:
-  { label: string; error?: string | undefined; rule: { minimum: number; maximum: number }; onInput?: () => void; autoFocus?: boolean }) {
+export function PasswordField({ label, error, rule, onInput, autoFocus, validateOnSubmit, submitted }:
+  { label: string; error?: string | undefined; rule: { minimum: number; maximum: number }; onInput?: () => void;
+    autoFocus?: boolean; validateOnSubmit?: boolean; submitted?: boolean }) {
   const { t } = useApp();
   const [value, setValue] = useState('');
   const length = passwordLength(value);
   const requirement = t(`${rule.minimum} characters or more`, `至少 ${rule.minimum} 个字符`);
   const missing = rule.minimum - length;
-  return <TextField name="password" type="password" autoComplete="new-password" isRequired isInvalid={Boolean(error)}
+  const maximum = t(`At most ${rule.maximum} characters`, `最多 ${rule.maximum} 个字符`);
+  const lengthError = submitted && (missing > 0 ? requirement : length > rule.maximum ? maximum : undefined);
+  const message = lengthError || error;
+  return <TextField name="password" type="password" autoComplete="new-password" isRequired isInvalid={Boolean(message)}
     value={value} onChange={next => { setValue(next); onInput?.(); }} {...(autoFocus ? { autoFocus: true } : {})}>
     <Label>{label}</Label>
     <Input className="w-full min-w-0" />
-    <Description aria-live="polite" data-password-state={length > rule.maximum ? 'long' : missing > 0 ? 'short' : 'met'}>
-      {length > rule.maximum ? <span className="text-danger">{t(`At most ${rule.maximum} characters`, `最多 ${rule.maximum} 个字符`)}</span>
+    {!validateOnSubmit && <Description aria-live="polite" data-password-state={length > rule.maximum ? 'long' : missing > 0 ? 'short' : 'met'}>
+      {length > rule.maximum ? <span className="text-danger">{maximum}</span>
         : missing <= 0 ? <span className="inline-flex items-center gap-1 text-success"><Check aria-hidden="true" width={14} height={14} />
           {requirement}</span>
         : length === 0 ? requirement
         : `${requirement} · ${t(missing === 1 ? '1 more to go' : `${missing} more to go`, `还差 ${missing} 个`)}`}
-    </Description>
-    <FieldError>{error}</FieldError>
+    </Description>}
+    <FieldError>{message}</FieldError>
   </TextField>;
 }
 
@@ -244,23 +248,25 @@ export function Choice({ label, value, onChange, options, isDisabled, className,
   </Select>;
 }
 
-// The shared email and password layout, with room for the live password requirement.
-export function CredentialsForm({ title, submit, mode, rule, defaultEmail, onSubmit, children, footer, disabled }: {
+// The shared email and password layout, including inline validation.
+export function CredentialsForm({ title, submit, mode, rule, defaultEmail, onSubmit, children, footer, disabled, validateOnSubmit }: {
   title: string; submit: string; mode: 'sign-in' | 'register'; rule?: { minimum: number; maximum: number };
-  defaultEmail?: string | undefined; disabled?: boolean;
+  defaultEmail?: string | undefined; disabled?: boolean; validateOnSubmit?: boolean;
   onSubmit: (email: string, password: string) => Promise<{ email?: string; password?: string; message?: string } | void>;
   children?: ReactNode; footer?: ReactNode;
 }) {
   const { language, t } = useApp();
   const [errors, setErrors] = useState<{ email?: string; password?: string; message?: string }>({});
   const [pending, setPending] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const busy = useRef(false);
   async function send(event: FormEvent<HTMLFormElement>) {
     const field = readForm(event);
     if (busy.current) return;
+    if (validateOnSubmit) setSubmitted(true);
     const password = field('password');
     if (rule && (passwordLength(password) < rule.minimum || passwordLength(password) > rule.maximum)) {
-      setErrors({ password: problem('invalid_password', language) });
+      if (!validateOnSubmit) setErrors({ password: problem('invalid_password', language) });
       return;
     }
     busy.current = true;
@@ -285,7 +291,8 @@ export function CredentialsForm({ title, submit, mode, rule, defaultEmail, onSub
           <Input className="w-full min-w-0" />
           <FieldError>{errors.email}</FieldError>
         </TextField>
-        {rule ? <PasswordField label={t('Password', '密码')} rule={rule} error={errors.password} onInput={() => clear('password')} />
+        {rule ? <PasswordField label={t('Password', '密码')} rule={rule} error={errors.password} onInput={() => clear('password')}
+            validateOnSubmit={Boolean(validateOnSubmit)} submitted={submitted} />
           : <TextField name="password" type="password" autoComplete="current-password" isRequired isInvalid={Boolean(errors.password)}
               onChange={() => clear('password')}>
             <Label>{t('Password', '密码')}</Label>

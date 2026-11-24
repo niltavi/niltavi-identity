@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { chromium } from '@playwright/test';
+import { chromium, expect } from '@playwright/test';
 import { totpCode } from '../dist/credentials.js';
 
 const base = Number(process.env.IDENTITY_LOCAL_PORT ?? 36400);
@@ -22,6 +22,8 @@ const run = randomBytes(3).toString('hex');
 const password = () => `walk-${randomBytes(9).toString('base64url')}-Aa1`;
 const people = Object.fromEntries(['owner', 'ada', 'ben', 'cy', 'dee'].map((name) =>
   [name, { email: `${name}-${run}@example.test`, password: password() }]));
+people.cy.password = `glowfx${run}`;
+people.dee.password = randomBytes(48).toString('base64url');
 const results = [];
 const browser = await chromium.launch({ headless: true });
 const contexts = [];
@@ -192,7 +194,7 @@ await journey('two-step verification: QR code, manual key, enable', async () => 
 });
 
 await journey('console write: register an application, credentials shown once', async () => {
-  await owner.getByRole('link', { name: 'Account center' }).or(owner.getByRole('tab', { name: 'Overview' })).first().waitFor();
+  await owner.getByRole('link', { name: 'Overview' }).waitFor();
   await owner.goto(origin + '/workspace');
   await owner.getByRole('link', { name: 'Instance console' }).click();
   await owner.waitForURL(origin + '/admin');
@@ -223,14 +225,18 @@ await journey('console write: register an application, credentials shown once', 
   await owner.getByRole('grid', { name: 'Audit log' }).waitFor();
 });
 
-await journey('register with mail: live password hint, 6-digit code, signed in', async () => {
+await journey('register with mail: password errors only after validation, 6-digit code, signed in', async () => {
   adaPage = await session();
   await adaPage.goto(origin + '/register');
   await adaPage.getByRole('heading', { name: 'Create an account' }).waitFor();
-  const hint = adaPage.locator('[data-password-state]');
-  assert.match(await hint.innerText(), /^12 characters or more$/);
+  assert.equal(await adaPage.getByText('12 characters or more').count(), 0);
   await adaPage.getByLabel('Email').fill(people.ada.email);
+  await adaPage.getByLabel('Password').fill('abcdefghijk');
+  assert.equal(await adaPage.getByText('12 characters or more').count(), 0);
+  await adaPage.getByRole('button', { name: 'Create account' }).click();
+  await adaPage.getByText('12 characters or more').waitFor();
   await adaPage.getByLabel('Password').fill('password1234');
+  await adaPage.getByText('12 characters or more').waitFor({ state: 'hidden' });
   await adaPage.getByRole('button', { name: 'Create account' }).click();
   await adaPage.getByText('too easy to guess').waitFor();
   await adaPage.getByLabel('Password').fill(people.ada.password);
@@ -254,11 +260,11 @@ await journey('profile: display name is saved', async () => {
   await adaPage.getByRole('button', { name: 'Save' }).click();
   await adaPage.getByText('Profile saved.').waitFor();
   await adaPage.reload();
-  await adaPage.getByText(`Ada L. · ${people.ada.email}`).waitFor();
+  await adaPage.getByRole('button', { name: 'Account menu' }).getByText('Ada L.').waitFor();
 });
 
 await journey('teams: personal space first, create a team, invite by email', async () => {
-  await adaPage.getByRole('tab', { name: 'Teams' }).click();
+  await adaPage.getByRole('link', { name: 'Teams' }).click();
   await adaPage.waitForURL(origin + '/workspace/teams');
   await adaPage.getByText('Personal space').waitFor();
   await adaPage.getByLabel('Team name').fill('Acme Research');
@@ -322,7 +328,7 @@ await journey('team roles: last owner is protected, promote, remove', async () =
 });
 
 await journey('agent tokens: create, shown once, revoke', async () => {
-  await adaPage.getByRole('tab', { name: 'Agent tokens' }).click();
+  await adaPage.getByRole('link', { name: 'Agent tokens' }).click();
   await adaPage.waitForURL(origin + '/workspace/tokens');
   await adaPage.getByText('No tokens yet.').waitFor();
   for (const name of ['laptop agent', 'ci agent']) {
@@ -372,7 +378,7 @@ await journey('recover and reset by mail: same answer for any address, tokens of
   await page.getByText('The selected tokens were revoked.').waitFor();
   await page.getByRole('link', { name: 'Continue to your account' }).click();
   await page.waitForURL(origin + '/workspace');
-  await page.getByRole('tab', { name: 'Agent tokens' }).click();
+  await page.getByRole('link', { name: 'Agent tokens' }).click();
   await page.getByText('No tokens yet.').waitFor();
   // The link works once.
   await page.goto(origin + '/login');
@@ -398,7 +404,7 @@ await journey('recover and reset by mail: same answer for any address, tokens of
 
 await journey('sessions: list, sign-out scopes, sign out of all devices', async () => {
   await adaPage.getByText('This browser').waitFor();
-  await adaPage.getByRole('button', { name: 'Sign out of the account center' }).waitFor();
+  await adaPage.getByRole('button', { name: 'Account menu' }).waitFor();
   await adaPage.getByText('Sign out of this app').waitFor();
   await adaPage.screenshot({ path: join(shots, 'sessions.png'), fullPage: true });
   await adaPage.getByRole('button', { name: 'Sign out of all devices' }).click();
@@ -435,18 +441,67 @@ await journey('console: remove outgoing mail, banner appears on every tab', asyn
 await journey('register without mail (Chinese): signed in at once, address unverified', async () => {
   const page = await session();
   await page.goto(origin + '/zh/register');
-  assert.match(await page.locator('[data-password-state]').innerText(), /^至少 12 个字符$/);
+  await page.getByRole('heading', { name: '创建账号' }).waitFor();
+  assert.equal(await page.getByText('至少 12 个字符').count(), 0);
+  await page.screenshot({ path: join(shots, 'Z-255-registration.png') });
   await page.getByLabel('邮箱').fill(people.cy.email);
-  await page.getByLabel('密码').fill('abc');
-  assert.match(await page.locator('[data-password-state]').innerText(), /还差 9 个/);
+  await page.getByLabel('密码').fill('abcdefghijk');
+  assert.equal(await page.getByText('至少 12 个字符').count(), 0);
+  await page.getByRole('button', { name: '创建账号' }).click();
+  await page.getByText('至少 12 个字符').waitFor();
+  await page.screenshot({ path: join(shots, 'Z-255-password-error.png') });
   await page.getByLabel('密码').fill(people.cy.password);
+  await page.getByText('至少 12 个字符').waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: '创建账号' }).click();
   await page.waitForURL(origin + '/zh/workspace');
   await page.getByText('未验证').waitFor();
   await page.getByText('此实例无法发信，请联系管理员为你验证邮箱。').waitFor();
   await page.screenshot({ path: join(shots, 'workspace-zh.png'), fullPage: true });
-  await page.getByRole('tab', { name: '登录状态' }).click();
-  await page.getByRole('button', { name: '退出账号中心' }).click();
+  assert.equal(await page.getByRole('button', { name: '邮件语言' }).count(), 0);
+  await page.getByRole('link', { name: '设置' }).click();
+  await page.waitForURL(origin + '/zh/workspace/settings');
+  const locale = page.getByRole('button', { name: /邮件语言/ });
+  assert.match(await locale.innerText(), /跟随浏览器/);
+  await choose(page, /邮件语言/, 'English');
+  await page.getByRole('button', { name: '保存' }).click();
+  await page.getByText('邮件语言已保存。').waitFor();
+  await page.reload();
+  await locale.waitFor();
+  assert.match(await locale.innerText(), /English/);
+  assert.equal(await page.locator('html').getAttribute('lang'), 'zh-CN');
+  await page.screenshot({ path: join(shots, 'Z-256-email-language.png') });
+  const menu = page.getByRole('button', { name: '账号菜单' });
+  await menu.focus();
+  await menu.press('Enter');
+  await page.getByRole('menuitem', { name: '退出登录' }).waitFor();
+  await page.screenshot({ path: join(shots, 'Z-254-desktop-sidebar.png'), animations: 'disabled' });
+  await page.keyboard.press('Escape');
+  const desktop = await session();
+  await signIn(desktop, people.cy);
+  const desktopMenu = desktop.getByRole('button', { name: 'Account menu' });
+  await desktopMenu.focus();
+  await desktopMenu.press('Enter');
+  await desktop.getByRole('menuitem', { name: 'Sign out' }).press('Enter');
+  await desktop.waitForURL(origin + '/login');
+  await desktop.context().close();
+  await page.setViewportSize({ width: 320, height: 800 });
+  await page.getByRole('button', { name: '打开账号中心导航' }).click();
+  const drawer = page.getByRole('dialog', { name: '账号中心' });
+  await drawer.getByRole('link', { name: '登录状态' }).click();
+  await page.waitForURL(origin + '/zh/workspace/sessions');
+  await drawer.waitFor({ state: 'hidden' });
+  await page.getByRole('button', { name: '打开账号中心导航' }).click();
+  await drawer.getByRole('button', { name: '账号菜单' }).click();
+  const signOut = page.getByRole('menuitem', { name: '退出登录' });
+  await signOut.waitFor();
+  await expect(signOut).toBeInViewport();
+  await signOut.evaluate(async node => {
+    await new Promise(requestAnimationFrame);
+    await Promise.allSettled(node.closest('[data-placement]')?.getAnimations({ subtree: true }).map(animation => animation.finished) ?? []);
+  });
+  await noOverflow(page, 'account menu at 320px');
+  await page.screenshot({ path: join(shots, 'Z-254-mobile-sidebar.png') });
+  await signOut.click();
   await page.waitForURL(origin + '/zh/login');
   await page.getByRole('link', { name: '忘记密码' }).click();
   await page.getByText('此实例无法发送邮件。请联系管理员为你生成密码重置链接。').waitFor();
@@ -478,9 +533,19 @@ await journey('console accounts: search, verify email, reset link shown once, di
   await page.getByRole('heading', { name: 'Password changed' }).waitFor();
   // The account holder asks for deletion. The console lists that request first.
   await page.getByRole('link', { name: 'Continue to your account' }).click();
+  await page.getByRole('link', { name: 'Settings' }).click();
+  await page.getByRole('link', { name: 'Account management' }).click();
+  await page.waitForURL(origin + '/workspace/settings/account');
+  await page.reload();
   await page.getByRole('button', { name: 'Request account deletion' }).click();
   await page.getByRole('button', { name: 'Confirm request' }).click();
   await page.getByText('You asked to delete this account').waitFor();
+  await page.getByRole('button', { name: 'Language' }).click();
+  await page.getByRole('menuitem', { name: '简体中文' }).click();
+  await page.waitForURL(origin + '/zh/workspace/settings/account');
+  await page.getByText('你已申请删除此账号').waitFor();
+  await page.getByRole('menu').waitFor({ state: 'detached' });
+  await page.screenshot({ path: join(shots, 'Z-257-deletion-request.png') });
   await owner.getByLabel('Search by email or name').fill('');
   await owner.getByRole('button', { name: 'Search' }).click();
   await owner.getByText('Asked to be deleted').waitFor();
@@ -488,7 +553,7 @@ await journey('console accounts: search, verify email, reset link shown once, di
   await act('Disable account');
   await row.getByText('Disabled').waitFor();
   await page.reload();
-  await page.waitForURL(origin + '/login');
+  await page.waitForURL(origin + '/zh/login');
   await page.context().close();
   await act('Delete account');
   await row.getByRole('button', { name: 'Delete permanently' }).click();
@@ -516,6 +581,45 @@ await journey('sign in from an application: protocol page, wrong password, back 
   await page.getByLabel('密码').fill(people.ada.password);
   await page.getByRole('button', { name: '登录' }).click();
   await page.waitForURL(app);
+  await page.context().close();
+});
+
+await journey('application access: validate password, revoke one app, and sign in again', async () => {
+  const page = await session();
+  const flagstone = `https://flagstone.localhost:${base + 1}`;
+  const wattlework = `https://wattlework.localhost:${base + 2}`;
+  await signIn(page, people.ada);
+  await page.goto(flagstone + '/tasks/42');
+  await page.waitForURL(flagstone + '/tasks/42');
+  await page.goto(wattlework + '/contracts/7');
+  await page.waitForURL(wattlework + '/contracts/7');
+  await page.goto(origin + '/zh/workspace/applications');
+  const revoke = page.getByRole('button', { name: '撤销 Flagstone Demo 的授权' });
+  await revoke.waitFor();
+  await page.getByRole('button', { name: '撤销 Wattlework Demo 的授权' }).waitFor();
+  await revoke.click();
+  const dialog = page.getByRole('dialog', { name: '撤销 Flagstone Demo 的授权？' });
+  await dialog.getByLabel('当前密码').waitFor();
+  await page.screenshot({ path: join(shots, 'Z-258-verify-access.png'), animations: 'disabled' });
+  await dialog.getByRole('button', { name: '取消' }).click();
+  await dialog.waitFor({ state: 'hidden' });
+  const status = async (app) => (await page.request.get(app + '/api/me')).status();
+  assert.equal(await status(flagstone), 200);
+  await revoke.click();
+  await dialog.getByLabel('当前密码').fill('wrong-password-value');
+  await dialog.getByRole('button', { name: '撤销授权' }).click();
+  await dialog.getByText('当前密码不正确。').waitFor();
+  assert.equal(await status(flagstone), 200);
+  await dialog.getByLabel('当前密码').fill(people.ada.password);
+  await dialog.getByRole('button', { name: '撤销授权' }).click();
+  await page.getByText('已撤销 Flagstone Demo 的授权。').waitFor();
+  await revoke.waitFor({ state: 'detached' });
+  await page.screenshot({ path: join(shots, 'Z-258-revoked-access.png') });
+  await expect.poll(() => status(flagstone)).toBe(401);
+  assert.equal(await status(wattlework), 200);
+  await page.goto(flagstone + '/tasks/42');
+  await page.waitForURL(flagstone + '/tasks/42');
+  assert.equal(await status(flagstone), 200);
   await page.context().close();
 });
 
@@ -603,7 +707,8 @@ await journey('invitation: wrong account, then an unverified address verified by
 
 await journey('no horizontal overflow at 320px and desktop, light and dark, both languages', async () => {
   const signedOut = ['/', '/login', '/register', '/recover', '/reset', '/verify-email', '/invite', '/setup'];
-  const signedIn = ['/workspace', '/workspace/sessions', '/workspace/teams', '/workspace/tokens', '/workspace/security',
+  const signedIn = ['/workspace', '/workspace/applications', '/workspace/sessions', '/workspace/teams', '/workspace/tokens', '/workspace/security',
+    '/workspace/settings', '/workspace/settings/account',
     '/admin', '/admin/accounts', '/admin/teams', '/admin/applications', '/admin/mail', '/admin/audit'];
   const cookies = await owner.context().cookies();
   for (const colorScheme of ['light', 'dark']) {

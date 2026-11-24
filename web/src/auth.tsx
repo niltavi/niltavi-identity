@@ -146,7 +146,7 @@ export function Register() {
   }
 
   return <CredentialsForm mode="register" title={t('Create an account', '创建账号')} submit={t('Create account', '创建账号')}
-    rule={settings.passwordRule} defaultEmail={invited?.email}
+    rule={settings.passwordRule} defaultEmail={invited?.email} validateOnSubmit
     onSubmit={async (email, password) => {
       try {
         const result = await call<{ created?: true; continueTo?: string }>('/account/register',

@@ -12,7 +12,7 @@ export const guideUrl = '/identity-assets/for-agents.md';
 export type Language = 'en' | 'zh-CN';
 export const sections = ['home', 'login', 'register', 'workspace', 'recover', 'reset', 'verify-email', 'invite', 'setup', 'admin'] as const;
 export type Section = typeof sections[number];
-export type Route = { language: Language; section: Section; tab?: string | undefined; team?: string | undefined };
+export type Route = { language: Language; section: Section; tab?: string | undefined; team?: string | undefined; accountManagement?: boolean };
 export type Navigate = (route: Route, replace?: boolean) => void;
 
 export const copy = {
@@ -34,20 +34,22 @@ export const copy = {
 
 const tabbed = (section: Section) => section === 'workspace' || section === 'admin';
 
-export function pathFor({ language, section, tab, team }: Route) {
+export function pathFor({ language, section, tab, team, accountManagement }: Route) {
   const base = language === 'zh-CN' ? '/zh' : '';
   if (section === 'home') return base + '/';
   return base + '/' + section + (tabbed(section) && tab ? '/' + tab : '') +
+    (section === 'workspace' && tab === 'settings' && accountManagement ? '/account' : '') +
     (section === 'workspace' && tab === 'teams' && team ? '?team=' + encodeURIComponent(team) : '');
 }
 
 export function routeFor(path: string, search = ''): Route {
   const segments = path.split('/').filter(Boolean);
   const language = segments[0] === 'zh' ? 'zh-CN' : 'en';
-  const [name, tab] = segments.slice(language === 'zh-CN' ? 1 : 0);
+  const [name, tab, subpage] = segments.slice(language === 'zh-CN' ? 1 : 0);
   const section = sections.find((known) => known === name) ?? 'home';
   const team = new URLSearchParams(search).get('team') ?? undefined;
   return { language, section, ...(tabbed(section) && tab && /^[a-z-]{1,24}$/.test(tab) ? { tab } : {}),
+    ...(section === 'workspace' && tab === 'settings' && subpage === 'account' ? { accountManagement: true } : {}),
     ...(section === 'workspace' && tab === 'teams' && team && /^[\w-]{1,64}$/.test(team) ? { team } : {}) };
 }
 

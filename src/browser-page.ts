@@ -40,6 +40,7 @@ export async function registerBrowserPage(app: FastifyInstance, issuer: URL) {
       app.get(path, send);
       // The account center and the instance console keep their open tab in the path.
       if (section === 'workspace' || section === 'admin') app.get(path + '/:tab', send);
+      if (section === 'workspace') app.get(path + '/settings/account', send);
     }
   }
   app.get('/zh', async (_request, reply) => reply.redirect('/zh/', 308));

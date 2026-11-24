@@ -43,8 +43,9 @@ export async function createNotifier(pool: Pool, issuer: URL, signing: JWK & { k
     },
     // One central session ended. Only the applications it had opened are told.
     session(sub: string, targets: Array<{ id: string; sid: string }>) {
-      void apps(targets.map(({ id }) => id)).then((list) => Promise.all(list.map((app) =>
-        post(app, logoutEvent, sub, targets.find(({ id }) => id === app.id)?.sid)))).catch(() => undefined);
+      if (!targets.length) return;
+      void apps(targets.map(({ id }) => id)).then((list) => Promise.all(list.flatMap((app) =>
+        targets.filter(({ id }) => id === app.id).map(({ sid }) => post(app, logoutEvent, sub, sid))))).catch(() => undefined);
     },
     // Team membership or role changed. Applications refresh the account's teams.
     membership(sub: string) {

@@ -24,8 +24,9 @@ export type Viewer = {
   activeSessions: number;
 };
 
-export function requestLanguage(request: FastifyRequest) {
-  return request.headers['accept-language']?.toLowerCase().startsWith('zh') ? 'zh' as const : 'en' as const;
+export function requestLanguage(request: FastifyRequest, preference?: Viewer['locale']) {
+  const language = preference ?? request.headers['accept-language'];
+  return language?.toLowerCase().startsWith('zh') ? 'zh' as const : 'en' as const;
 }
 
 export function fields(request: FastifyRequest, ...keys: string[]) {

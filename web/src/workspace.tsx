@@ -1,16 +1,25 @@
-import { Button, Form, Input, Label, Link, Tabs, TextField, buttonVariants } from '@heroui/react';
+import { Avatar, Button, Drawer, Dropdown, FieldError, Form, Input, Label, Link, Modal, Tabs, TextField } from '@heroui/react';
+import ArrowRightFromSquare from '@gravity-ui/icons/ArrowRightFromSquare';
+import Bars from '@gravity-ui/icons/Bars';
+import Clock from '@gravity-ui/icons/Clock';
+import Gear from '@gravity-ui/icons/Gear';
+import House from '@gravity-ui/icons/House';
+import Key from '@gravity-ui/icons/Key';
+import LayoutCellsLarge from '@gravity-ui/icons/LayoutCellsLarge';
+import Persons from '@gravity-ui/icons/Persons';
+import ShieldCheck from '@gravity-ui/icons/ShieldCheck';
 import QRCode from 'qrcode';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { call, codeOf, problem } from './api';
-import type { AgentToken, Team, TeamRole } from './api';
+import type { Account, AgentToken, Team, TeamRole } from './api';
 import { container } from './site';
 import type { Route } from './site';
 import {
   Choice, CodeField, ConfirmButton, CopyButton, Empty, Loaded, Notice, PageLink, Panel, Secret, State, TaskFeedback, readForm, useApp, useLoad, useTask, useTime,
 } from './ui';
 
-// The frame shared by the account center and the instance console: a title, tabs kept in the address, one panel.
+// The instance console keeps its tabs in the address.
 export function TabbedPage({ title, subtitle, aside, tabs, route, banner, children }: {
   title: string; subtitle?: ReactNode; aside?: ReactNode; tabs: Array<{ id: string; label: string }>; route: Route; banner?: ReactNode; children: ReactNode;
 }) {
@@ -44,27 +53,109 @@ export function TabbedPage({ title, subtitle, aside, tabs, route, banner, childr
 }
 
 export function Workspace({ route }: { route: Route }) {
-  const { t, account } = useApp();
+  const { t, account, refresh } = useApp();
+  const signOut = useTask();
+  const [drawerOpen, setDrawerOpen] = useState(false);
   if (!account) return null;
-  const tabs = [
-    { id: 'overview', label: t('Overview', '概览') }, { id: 'sessions', label: t('Sessions', '登录状态') },
-    { id: 'teams', label: t('Teams', '团队') }, { id: 'tokens', label: t('Agent tokens', 'Agent 令牌') },
-    { id: 'security', label: t('Security', '安全') },
+  const pages = [
+    { id: undefined, label: t('Overview', '概览'), icon: House, content: <Overview /> },
+    { id: 'applications', label: t('Applications', '应用'), icon: LayoutCellsLarge, content: <Applications /> },
+    { id: 'sessions', label: t('Sessions', '登录状态'), icon: Clock, content: <Sessions /> },
+    { id: 'teams', label: t('Teams', '团队'), icon: Persons, content: <Teams team={route.team} /> },
+    { id: 'tokens', label: t('Agent tokens', 'Agent 令牌'), icon: Key, content: <Tokens /> },
+    { id: 'security', label: t('Security', '安全'), icon: ShieldCheck, content: <Security /> },
+    { id: 'settings', label: t('Settings', '设置'), icon: Gear, content: route.accountManagement ? <AccountManagement /> : <Preferences /> },
   ];
-  const tab = tabs.some(({ id }) => id === route.tab) ? route.tab : 'overview';
-  return <TabbedPage title={t('Account center', '账号中心')} subtitle={account.name ? `${account.name} · ${account.email}` : account.email} tabs={tabs} route={route}
-    aside={account.instanceRole && <PageLink to={{ section: 'admin' }} className={buttonVariants({ variant: 'secondary', size: 'sm' })}>{t('Instance console', '实例管理台')}</PageLink>}>
-    {tab === 'overview' ? <Overview /> : tab === 'sessions' ? <Sessions /> : tab === 'teams' ? <Teams team={route.team} />
-      : tab === 'tokens' ? <Tokens /> : <Security />}
-  </TabbedPage>;
+  const active = pages.find(({ id }) => id === route.tab) ?? pages[0]!;
+  const navigation = t('Account navigation', '账号中心导航');
+  const sidebar = <>
+    <nav aria-label={navigation} className="min-h-0 grow overflow-y-auto">
+      <ul className="grid gap-1">
+        {pages.map(({ id, label, icon: Icon }) => <li key={id ?? 'overview'}>
+          <PageLink to={{ section: 'workspace', tab: id }} className="workspace-nav-link"
+            {...(id === active.id ? { 'aria-current': 'page' } : {})} onClick={() => setDrawerOpen(false)}>
+            <Icon width={16} height={16} aria-hidden="true" />{label}
+          </PageLink>
+        </li>)}
+        {account.instanceRole && <li className="mt-2 border-t border-separator pt-2">
+          <PageLink to={{ section: 'admin' }} className="workspace-nav-link">
+            <ShieldCheck width={16} height={16} aria-hidden="true" />{t('Instance console', '实例管理台')}
+          </PageLink>
+        </li>}
+      </ul>
+    </nav>
+    <div className="border-t border-separator pt-2">
+      <AccountMenu account={account} busy={Boolean(signOut.pending)} onSignOut={() => {
+        setDrawerOpen(false);
+        void signOut.run('logout', async () => {
+          await call('/account/logout', {});
+          await refresh();
+        });
+      }} />
+    </div>
+  </>;
+  return <div className="grid flex-1 grid-cols-[auto_minmax(0,1fr)]">
+    <aside className="workspace-rail">
+      <Drawer isOpen={drawerOpen} onOpenChange={setDrawerOpen}>
+        <Button size="sm" variant="ghost" isIconOnly className="md:hidden" aria-label={t('Open account navigation', '打开账号中心导航')}>
+          <Bars width={18} height={18} aria-hidden="true" />
+        </Button>
+        <Drawer.Backdrop>
+          <Drawer.Content placement="left" className="max-w-64">
+            <Drawer.Dialog className="flex min-h-0 flex-col">
+              <Drawer.Header>
+                <Drawer.Heading>{t('Account center', '账号中心')}</Drawer.Heading>
+                <Drawer.CloseTrigger aria-label={t('Close navigation', '关闭导航')} />
+              </Drawer.Header>
+              <Drawer.Body className="flex min-h-0 flex-1 flex-col gap-3">{sidebar}</Drawer.Body>
+            </Drawer.Dialog>
+          </Drawer.Content>
+        </Drawer.Backdrop>
+      </Drawer>
+      <div className="hidden min-h-0 flex-1 flex-col gap-3 md:flex">{sidebar}</div>
+    </aside>
+    <main className={`${container} grid min-w-0 content-start gap-5 py-8 md:py-12`}>
+      {route.accountManagement && <PageLink to={{ section: 'workspace', tab: 'settings' }} className="justify-self-start">
+        {t('Back to settings', '返回设置')}
+      </PageLink>}
+      <h1 className="text-balance text-3xl font-semibold tracking-tight">
+        {route.accountManagement ? t('Account management', '账号管理') : active.id ? active.label : t('Account center', '账号中心')}
+      </h1>
+      <TaskFeedback task={signOut} />
+      {active.content}
+    </main>
+  </div>;
+}
+
+function AccountMenu({ account, onSignOut, busy }: { account: Account; onSignOut: () => void; busy: boolean }) {
+  const { t } = useApp();
+  const initials = account.name
+    ? account.name.split(/\s+/).slice(0, 2).map(part => Array.from(part)[0]).join('')
+    : account.email.slice(0, 2);
+  const label = t('Account menu', '账号菜单');
+  return <Dropdown>
+    <Button variant="ghost" className="h-auto min-h-11 w-full min-w-0 justify-start px-2 text-left" aria-label={label} isPending={busy}>
+      <Avatar size="sm" color="accent" className="shrink-0"><Avatar.Fallback>{initials.toUpperCase()}</Avatar.Fallback></Avatar>
+      <span className="grid min-w-0 flex-1">
+        {account.name && <span className="truncate font-medium">{account.name}</span>}
+        <span className="truncate text-xs text-muted" title={account.email}>{account.email}</span>
+      </span>
+    </Button>
+    <Dropdown.Popover placement="top start">
+      <Dropdown.Menu aria-label={label} onAction={onSignOut}>
+        <Dropdown.Item id="sign-out" textValue={t('Sign out', '退出登录')}>
+          <ArrowRightFromSquare width={16} height={16} aria-hidden="true" />
+          <Label>{t('Sign out', '退出登录')}</Label>
+        </Dropdown.Item>
+      </Dropdown.Menu>
+    </Dropdown.Popover>
+  </Dropdown>;
 }
 
 function Overview() {
   const { t, account, settings, refresh } = useApp();
   const profile = useTask();
   const email = useTask();
-  const deletion = useTask();
-  const [locale, setLocale] = useState(account?.locale ?? 'browser');
   if (!account) return null;
   return <>
     <Panel title={t('Profile', '个人资料')}>
@@ -72,7 +163,7 @@ function Overview() {
       <Form className="grid max-w-md gap-4" validationBehavior="native" onSubmit={event => {
         const name = readForm(event)('name');
         void profile.run('save', async () => {
-          await call('/account/profile', { name, locale: locale === 'browser' ? '' : locale });
+          await call('/account/profile', { name });
           await refresh();
           return t('Profile saved.', '个人资料已保存。');
         });
@@ -80,8 +171,6 @@ function Overview() {
         <TextField name="name" defaultValue={account.name ?? ''} autoComplete="name">
           <Label>{t('Display name', '显示名称')}</Label><Input className="w-full min-w-0" maxLength={80} />
         </TextField>
-        <Choice label={t('Language for emails', '邮件语言')} value={locale} onChange={value => setLocale(value as typeof locale)} options={[
-          { id: 'browser', label: t('Same as this browser', '跟随浏览器') }, { id: 'en', label: 'English' }, { id: 'zh-CN', label: '简体中文' }]} />
         <div><Button type="submit" isPending={profile.pending === 'save'}>{t('Save', '保存')}</Button></div>
       </Form>
     </Panel>
@@ -98,12 +187,41 @@ function Overview() {
         })}>{t('Send verification email', '发送验证邮件')}</Button></div>
         : <Empty>{t('This instance cannot send mail. Ask an administrator to verify your address.', '此实例无法发信，请联系管理员为你验证邮箱。')}</Empty>)}
     </Panel>
-    <Panel title={t('Applications', '应用')} description={t('Sign in once here and these open without another password.', '在这里登录一次，就能直接打开这些应用。')}>
-      {settings?.applications.length ? <ul className="grid gap-2">
-        {settings.applications.map(({ id, name, url }) => <li key={id}><Link href={url} target="_blank" rel="noreferrer">{name}<Link.Icon /></Link></li>)}
-      </ul> : <Empty>{t('No applications are connected yet.', '还没有接入应用。')}</Empty>}
+  </>;
+}
+
+function Preferences() {
+  const { account, refresh, t } = useApp();
+  const task = useTask();
+  const [locale, setLocale] = useState<string>(account?.locale ?? 'browser');
+  return <>
+    <Panel title={t('Preferences', '偏好设置')}
+      description={t('Choose the language for email verification and password reset messages.', '选择邮箱验证和密码重置邮件的语言。')}>
+      <TaskFeedback task={task} />
+      <Form className="grid max-w-md gap-4" onSubmit={event => {
+        event.preventDefault();
+        void task.run('save', async () => {
+          await call('/account/preferences', { locale: locale === 'browser' ? '' : locale });
+          await refresh();
+          return t('Email language saved.', '邮件语言已保存。');
+        });
+      }}>
+        <Choice label={t('Email language', '邮件语言')} value={locale} onChange={setLocale} options={[
+          { id: 'browser', label: t('Same as this browser', '跟随浏览器') }, { id: 'en', label: 'English' }, { id: 'zh-CN', label: '简体中文' }]} />
+        <div><Button type="submit" isPending={task.pending === 'save'}>{t('Save', '保存')}</Button></div>
+      </Form>
     </Panel>
-    <Panel title={t('Delete account', '删除账号')}>
+    <PageLink to={{ section: 'workspace', tab: 'settings', accountManagement: true }} className="justify-self-start">
+      {t('Account management', '账号管理')}
+    </PageLink>
+  </>;
+}
+
+function AccountManagement() {
+  const { t, account, refresh } = useApp();
+  const deletion = useTask();
+  if (!account) return null;
+  return <Panel title={t('Delete account', '删除账号')}>
       <TaskFeedback task={deletion} />
       {account.deletionRequested ? <>
         <Notice status="warning">{t('You asked to delete this account. An administrator will handle the request. Your account works until then.',
@@ -121,8 +239,97 @@ function Overview() {
             await refresh();
           })} /></div>
       </>}
-    </Panel>
+  </Panel>;
+}
+
+type AuthorizedApplication = { id: string; name: string; url: string };
+
+function Applications() {
+  const { settings, t } = useApp();
+  const list = useLoad(() => call<{ applications: AuthorizedApplication[] }>('/account/applications'), 'applications');
+  const [notice, setNotice] = useState<string>();
+  return <>
+    {notice && <Notice status="success">{notice}</Notice>}
+    <Loaded source={list}>{({ applications }) => {
+      const available = settings?.applications.filter(app => !applications.some(authorized => authorized.id === app.id)) ?? [];
+      return <>
+        <Panel title={t('Authorized applications', '已授权应用')}>
+          {applications.length ? <ul className="grid divide-y divide-separator">
+            {applications.map(app => <li key={app.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
+              <Link href={app.url} target="_blank" rel="noreferrer" className="wrap-anywhere">{app.name}<Link.Icon /></Link>
+              <RevokeApplication app={app} onRevoked={() => {
+                setNotice(t(`Access revoked for ${app.name}.`, `已撤销 ${app.name} 的授权。`));
+                void list.reload();
+              }} />
+            </li>)}
+          </ul> : <Empty>{t('You have no authorized applications.', '你还没有已授权的应用。')}</Empty>}
+        </Panel>
+        {available.length > 0 && <Panel title={t('Available applications', '可用应用')}>
+          <ul className="grid gap-2">
+            {available.map(app => <li key={app.id}><Link href={app.url} target="_blank" rel="noreferrer">{app.name}<Link.Icon /></Link></li>)}
+          </ul>
+        </Panel>}
+      </>;
+    }}</Loaded>
   </>;
+}
+
+function RevokeApplication({ app, onRevoked }: { app: AuthorizedApplication; onRevoked: () => void }) {
+  const { t, language } = useApp();
+  const task = useTask();
+  const [open, setOpen] = useState(false);
+  const [passwordError, setPasswordError] = useState<string>();
+  const pending = Boolean(task.pending);
+  const revoke = t('Revoke access', '撤销授权');
+  return <Modal isOpen={open} onOpenChange={next => {
+    if (pending) return;
+    task.setError(undefined);
+    setPasswordError(undefined);
+    setOpen(next);
+  }}>
+    <Button size="sm" variant="secondary" aria-label={t(`Revoke access for ${app.name}`, `撤销 ${app.name} 的授权`)}>{revoke}</Button>
+    <Modal.Backdrop isDismissable={!pending} isKeyboardDismissDisabled={pending}>
+      <Modal.Container>
+        <Modal.Dialog>
+          <Modal.Header><Modal.Heading className="wrap-anywhere">
+            {t(`Revoke access for ${app.name}?`, `撤销 ${app.name} 的授权？`)}
+          </Modal.Heading></Modal.Header>
+          <Form className="contents" onSubmit={event => {
+            const password = readForm(event)('password');
+            void task.run('revoke', async () => {
+              try {
+                await call(`/account/applications/${encodeURIComponent(app.id)}/revoke`, { password });
+              } catch (failure) {
+                if (codeOf(failure) !== 'incorrect_password') throw failure;
+                setPasswordError(problem(failure, language));
+                return;
+              }
+              setOpen(false);
+              onRevoked();
+            });
+          }}>
+            <Modal.Body className="grid gap-4">
+              <p className="text-muted">
+                {t('This ends your sign-in sessions for this application on all devices. Sign in to the application again to restore access.',
+                  '此应用会在所有设备上退出登录。再次登录此应用即可重新授权。')}
+              </p>
+              <TaskFeedback task={task} />
+              <TextField name="password" type="password" autoComplete="current-password" autoFocus isRequired
+                isInvalid={Boolean(passwordError)} isReadOnly={pending} onChange={() => setPasswordError(undefined)}>
+                <Label>{t('Current password', '当前密码')}</Label>
+                <Input className="w-full min-w-0" />
+                <FieldError>{passwordError}</FieldError>
+              </TextField>
+            </Modal.Body>
+            <Modal.Footer>
+              <Button type="button" slot="close" variant="tertiary" isDisabled={pending}>{t('Cancel', '取消')}</Button>
+              <Button type="submit" variant="danger" isPending={pending}>{revoke}</Button>
+            </Modal.Footer>
+          </Form>
+        </Modal.Dialog>
+      </Modal.Container>
+    </Modal.Backdrop>
+  </Modal>;
 }
 
 function browserName(agent: string | null, unknown: string) {
@@ -163,13 +370,6 @@ function Sessions() {
     </Panel>
     <Panel title={t('Sign out', '退出登录')} description={t('To sign out of one application only, use “Sign out of this app” inside that application.', '只想退出某个应用时，请在该应用内使用「退出当前应用」。')}>
       <div className="grid gap-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="min-w-0 text-sm text-muted">{t('Ends the account center session in this browser. Applications stay signed in.', '结束此浏览器上的账号中心会话，应用保持登录。')}</p>
-          <Button variant="secondary" isPending={task.pending === 'logout'} onPress={() => void task.run('logout', async () => {
-            await call('/account/logout', {});
-            await refresh();
-          })}>{t('Sign out of the account center', '退出账号中心')}</Button>
-        </div>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="min-w-0 text-sm text-muted">{t('Ends every session on every device, including all applications.', '结束所有设备上的全部会话，包括所有应用。')}</p>
           <ConfirmButton size="md" label={t('Sign out of all devices', '退出所有设备')} confirm={t('Confirm: sign out everywhere', '确认退出所有设备')} pending={task.pending === 'all'}

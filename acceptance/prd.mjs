@@ -455,6 +455,48 @@ try {
   assert.equal((await check(one, beforeClaims.sub, beforeClaims.sid)).body.active, false, 'Re-enabling does not revive an ended session');
   passed('invariant 5: single-session revoke, sign-out everywhere and disabling take effect at the next check and survive a restart');
 
+  // One application's grants can be revoked without ending the central session.
+  const device = await signIn(memberEmail, newPassword);
+  async function openFrom(registeredApp, session) {
+    const visit = flow(registeredApp, session);
+    const result = await visit.tokens((await visit.follow(await visit.start())).location);
+    assert.equal(result.status, 200);
+    return { ...result.body, sid: decodeJwt(result.body.id_token).sid };
+  }
+  const appOne = await openFrom(one, device);
+  const appTwo = await openFrom(two, device);
+  const secondDevice = await signIn(memberEmail, newPassword);
+  const secondAppOne = await openFrom(one, secondDevice);
+  const revokeApp = `/account/applications/${one.client_id}/revoke`;
+  const userInfo = (token) => http('GET', '/me', { headers: { authorization: `Bearer ${token}` } });
+  const authorized = await device.get('/account/applications');
+  assert.equal(authorized.status, 200, authorized.text);
+  assert.deepEqual(authorized.body.applications.map(({ id }) => id), [one.client_id, two.client_id]);
+  assert.equal((await device.post(revokeApp, { password: 'wrong password' })).body.error, 'incorrect_password');
+  assert.equal((await check(one, memberId, appOne.sid)).body.active, true);
+  const expired = await signIn(memberEmail, newPassword);
+  const expiredToken = expired.jar.get('__Host-niltavi-session');
+  const expiredKey = createHash('sha256').update(expiredToken).digest('base64url');
+  await pool.query("UPDATE web_sessions SET expires_at = now() - interval '1 minute' WHERE token_digest = $1", [expiredKey]);
+  assert.equal((await expired.post(revokeApp, { password: newPassword })).status, 401);
+  assert.equal((await userInfo(appOne.access_token)).status, 200);
+  assert.equal((await device.post(revokeApp, { password: newPassword })).status, 204);
+  assert.equal((await device.get('/account/session')).status, 200);
+  assert.equal((await check(one, memberId, appOne.sid)).body.active, false);
+  assert.equal((await check(one, memberId, secondAppOne.sid)).body.active, false);
+  assert.equal((await userInfo(appOne.access_token)).status, 401);
+  assert.equal((await http('POST', '/token', { form: { grant_type: 'refresh_token', refresh_token: secondAppOne.refresh_token },
+    headers: basic(one.client_id, one.client_secret), server: true })).body.error, 'invalid_grant');
+  assert.equal((await check(two, memberId, appTwo.sid)).body.active, true);
+  await app.close();
+  app = await service(pool);
+  assert.equal((await check(one, memberId, appOne.sid)).body.active, false);
+  const reauthorized = await openFrom(one, device);
+  assert.notEqual(reauthorized.sid, appOne.sid);
+  assert.equal((await check(one, memberId, appOne.sid)).body.active, false);
+  assert.equal((await check(one, memberId, reauthorized.sid)).body.active, true);
+  passed('application revocation requires a fresh password and session, ends old tokens and sessions on every device, and leaves other apps signed in');
+
   // ── Rate limits ──────────────────────────────────────────────────────────────────
   await clearLimits();
   const attempts = async (email) => {
@@ -543,9 +585,12 @@ try {
   await clearLimits();
   inboxMark = inbox.length;
   const stale = await signIn('verified@example.test');
+  assert.equal((await stale.post('/account/preferences', { locale: 'zh-CN' })).status, 204);
+  assert.equal((await stale.post('/account/profile', { name: 'Verified User' })).status, 204);
+  assert.equal((await stale.get('/account/session')).body.account.locale, 'zh-CN');
   assert.equal((await browser().post('/account/recover', { email: 'verified@example.test' })).status, 202);
   assert.equal((await browser().post('/account/recover', { email: 'unicode@example.test' })).status, 202);
-  const [, mailedToken] = await mail('verified@example.test', /\/reset#([\w-]{43})/, inboxMark);
+  const [, mailedToken] = await mail('verified@example.test', /\/zh\/reset#([\w-]{43})/, inboxMark);
   secret(mailedToken);
   await quiet();
   assert.ok(!inbox.slice(inboxMark).some(({ to }) => to === 'unicode@example.test'), 'An unverified address receives no recovery link');

@@ -52,7 +52,6 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
   }
   if (allowedDomain) mailAddress(`mail@${allowedDomain}`);
   const mailLanguage = requestLanguage;
-  const localized = (request: FastifyRequest, path: string) => issuer.origin + (mailLanguage(request) === 'zh' ? '/zh' : '') + path;
   const initialized = async () => testenvSignup || Boolean(await getSetting<boolean>(pool, 'initialized'));
 
   app.get('/account/config', async () => {
@@ -261,9 +260,51 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
   app.post('/account/profile', guard, async (request, reply) => {
     const viewer = await web.viewer(request);
     if (!viewer) return failure(reply, 401, 'sign_in_required');
-    const [name, locale] = fields(request, 'name', 'locale') ?? [];
-    if (name === undefined || [...name.trim()].length > 80 || !['', 'en', 'zh-CN'].includes(locale ?? 'x')) return failure(reply, 400, 'invalid_profile');
-    await pool.query('UPDATE accounts SET display_name = $2, locale = $3 WHERE id = $1', [viewer.id, name.trim() || null, locale || null]);
+    const [name, locale] = fields(request, 'name', 'locale') ?? fields(request, 'name') ?? [];
+    if (name === undefined || [...name.trim()].length > 80 ||
+        (locale !== undefined && !['', 'en', 'zh-CN'].includes(locale))) return failure(reply, 400, 'invalid_profile');
+    await pool.query(`UPDATE accounts SET display_name = $2, locale = CASE WHEN $3 THEN $4 ELSE locale END WHERE id = $1`,
+      [viewer.id, name.trim() || null, locale !== undefined, locale || null]);
+    return reply.code(204).send();
+  });
+
+  app.post('/account/preferences', guard, async (request, reply) => {
+    const viewer = await web.viewer(request);
+    if (!viewer) return failure(reply, 401, 'sign_in_required');
+    const [locale] = fields(request, 'locale') ?? [];
+    if (locale === undefined || !['', 'en', 'zh-CN'].includes(locale)) return failure(reply, 400, 'invalid_request');
+    await pool.query('UPDATE accounts SET locale = $2 WHERE id = $1', [viewer.id, locale || null]);
+    return reply.code(204).send();
+  });
+
+  app.get('/account/applications', async (request, reply) => {
+    const viewer = await web.viewer(request);
+    return viewer ? { applications: await store.applications(viewer.id) } : failure(reply, 401, 'sign_in_required');
+  });
+
+  app.post<{ Params: { id: string } }>('/account/applications/:id/revoke', guard, async (request, reply) => {
+    const viewer = await web.viewer(request);
+    if (!viewer) return failure(reply, 401, 'sign_in_required');
+    const [password] = fields(request, 'password') ?? [];
+    if (!password) return failure(reply, 400, 'invalid_request');
+    if (!await loginRateAllowed(pool, request.ip, viewer.email, 'revoke-app', 5)) return failure(reply, 429, 'try_later');
+    const account = await getLogin(pool, viewer.email);
+    const authentic = await verifyPassword(password, account?.password_hash ?? backupHash);
+    if (!authentic || !account?.enabled || account.id !== viewer.id) return failure(reply, 403, 'incorrect_password');
+    const client = request.params.id;
+    const result = await transaction(pool, async (db) => {
+      const current = await db.query(`SELECT 1 FROM accounts
+        WHERE id = $1 AND enabled AND security_epoch = $2 FOR UPDATE`, [viewer.id, account.security_epoch]);
+      const session = current.rowCount && await db.query(`SELECT 1 FROM web_sessions
+        WHERE token_digest = $1 AND account_id = $2 AND account_epoch = $3 AND expires_at > clock_timestamp() FOR UPDATE`,
+        [viewer.key, viewer.id, account.security_epoch]);
+      if (!session || !session.rowCount) return { signedIn: false } as const;
+      const targets = await store.revokeApplication(db, viewer.id, client);
+      if (targets) await audit(db, 'account.application_revoked', client, viewer.id);
+      return { signedIn: true, targets } as const;
+    });
+    if (!result.signedIn) return failure(reply, 401, 'sign_in_required');
+    if (result.targets) notifier.session(viewer.id, result.targets);
     return reply.code(204).send();
   });
 
@@ -312,14 +353,14 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     if (!await rateAllowed(pool, [[`recover:address:${email}`, 3, 900], [`recover:source:${request.ip}`, 20]])) {
       return failure(reply, 429, 'try_later');
     }
-    const link = localized(request, '/reset#');
-    const language = mailLanguage(request);
     mailer.later(async () => {
       if (!await mailer.general()) return;
       // An unverified address proves nothing about who owns the account, so it gets no link.
-      const account = (await pool.query<{ id: string }>(
-        'SELECT id FROM accounts WHERE email = $1 AND enabled AND email_verified_at IS NOT NULL', [email])).rows[0];
+      const account = (await pool.query<{ id: string; locale: 'en' | 'zh-CN' | null }>(
+        'SELECT id, locale FROM accounts WHERE email = $1 AND enabled AND email_verified_at IS NOT NULL', [email])).rows[0];
       if (!account) return;
+      const language = mailLanguage(request, account.locale);
+      const link = issuer.origin + (language === 'zh' ? '/zh' : '') + '/reset#';
       const token = await transaction(pool, async (db) => {
         await audit(db, 'account.recovery_requested', account.id, account.id);
         return issueAccountLink(db, account.id, email, 'reset');
@@ -372,8 +413,8 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     if (!await mailer.general()) return failure(reply, 503, 'delivery_unavailable');
     if (!await rateAllowed(pool, [[`verify-link:${viewer.id}`, 3, 900]])) return failure(reply, 429, 'try_later');
     const token = await issueAccountLink(pool, viewer.id, viewer.email, 'verify');
-    const link = localized(request, '/verify-email#') + token;
-    const language = mailLanguage(request);
+    const language = mailLanguage(request, viewer.locale);
+    const link = issuer.origin + (language === 'zh' ? '/zh' : '') + '/verify-email#' + token;
     mailer.later(() => mailer.send(viewer.email, messages.verify(link, language)));
     return reply.code(202).send({ accepted: true });
   });

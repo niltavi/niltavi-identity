@@ -63,6 +63,7 @@ const problems: Record<string, [string, string]> = {
   invalid_password: ['Use a password of 12 to 256 characters.', '密码长度须为 12 到 256 个字符。'],
   common_password: ['This password is too easy to guess. Choose a different one.', '这个密码太容易被猜到，请换一个。'],
   invalid_credentials: ['The email or password is incorrect.', '邮箱或密码不正确。'],
+  incorrect_password: ['Your current password is incorrect.', '当前密码不正确。'],
   invalid_code: ['The code is incorrect or has expired.', '验证码不正确或已过期。'],
   registration_unavailable: ['Registration is not open on this instance.', '此实例未开放注册。'],
   registration_domain: ['Use an address at the domain shown on this page.', '请使用页面上所示域名的邮箱。'],
