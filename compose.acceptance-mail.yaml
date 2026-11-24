@@ -1,0 +1,30 @@
+services:
+  identity:
+    environment:
+      IDENTITY_DEPLOYMENT_PROFILE: acceptance
+      IDENTITY_SMTP_URL_FILE: /run/identity/acceptance-smtp.url
+      IDENTITY_SMTP_CA_FILE: /run/identity/acceptance-mail.crt
+      IDENTITY_SMTP_FROM: ${IDENTITY_ACCEPTANCE_SMTP_FROM:-verify@niltavi.test}
+      IDENTITY_REGISTRATION_DOMAIN: ${IDENTITY_ACCEPTANCE_EMAIL_DOMAIN:-niltavi.test}
+      IDENTITY_ACCEPTANCE_OPERATOR_DOMAIN: ${IDENTITY_ACCEPTANCE_EMAIL_DOMAIN:-niltavi.test}
+      IDENTITY_ACCEPTANCE_SHARED_EMAIL: ${IDENTITY_ACCEPTANCE_SHARED_EMAIL:-}
+      IDENTITY_ACCEPTANCE_OPERATORS: 'true'
+    depends_on:
+      mail:
+        condition: service_started
+  mail:
+    image: axllent/mailpit:v1.34.0
+    user: '1000:1000'
+    restart: unless-stopped
+    environment:
+      MP_SMTP_TLS_CERT: /certs/smtp.crt
+      MP_SMTP_TLS_KEY: /certs/smtp.key
+      MP_SMTP_REQUIRE_STARTTLS: 'true'
+      MP_SMTP_ALLOWED_RECIPIENTS: ${IDENTITY_ACCEPTANCE_RECIPIENT_PATTERN:-@niltavi\.test$}
+      MP_SMTP_MAX_RECIPIENTS: '1'
+      MP_SMTP_DISABLE_RDNS: 'true'
+      MP_DISABLE_VERSION_CHECK: 'true'
+      MP_MAX_MESSAGES: '100'
+      MP_MAX_AGE: 1h
+    volumes:
+      - ${IDENTITY_DEPLOY_DIR:?set the directory with deployment files}/acceptance-mail:/certs:ro
