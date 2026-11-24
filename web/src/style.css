@@ -5,6 +5,7 @@
 @source "./protocol.tsx";
 @source "./auth.tsx";
 @source "./setup.tsx";
+@source "./sidebar-layout.tsx";
 @source "./workspace.tsx";
 @source "./admin.tsx";
 @source "../vendor/niltavi-ui/product";
@@ -19,7 +20,7 @@
 }
 
 @layer components {
-  .workspace-rail {
+  .sidebar-rail {
     position: sticky;
     inset-block-start: 0;
     display: flex;
@@ -33,13 +34,13 @@
   }
 
   @media (min-width: 768px) {
-    .workspace-rail {
+    .sidebar-rail {
       width: calc(var(--spacing) * 60);
       padding: calc(var(--spacing) * 4) calc(var(--spacing) * 3);
     }
   }
 
-  .workspace-nav-link {
+  .sidebar-link {
     display: flex;
     width: 100%;
     min-height: calc(var(--spacing) * 10);
@@ -52,8 +53,8 @@
     text-decoration: none;
   }
 
-  .workspace-nav-link:hover { background: var(--default); color: var(--foreground); }
-  .workspace-nav-link[aria-current] { background: var(--accent-soft); color: var(--accent-soft-foreground); font-weight: 500; }
-  .workspace-nav-link:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
-  .workspace-nav-link svg { flex-shrink: 0; }
+  .sidebar-link:hover { background: var(--default); color: var(--foreground); }
+  .sidebar-link[aria-current] { background: var(--accent-soft); color: var(--accent-soft-foreground); font-weight: 500; }
+  .sidebar-link:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .sidebar-link svg { flex-shrink: 0; }
 }

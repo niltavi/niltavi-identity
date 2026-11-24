@@ -1,6 +1,5 @@
-import { Avatar, Button, Card, Drawer, Dropdown, FieldError, Form, Input, Label, Link, Modal, Tabs, TextField } from '@heroui/react';
+import { Avatar, Button, Card, Dropdown, FieldError, Form, Input, Label, Link, Modal, TextField } from '@heroui/react';
 import ArrowRightFromSquare from '@gravity-ui/icons/ArrowRightFromSquare';
-import Bars from '@gravity-ui/icons/Bars';
 import ChevronRight from '@gravity-ui/icons/ChevronRight';
 import Clock from '@gravity-ui/icons/Clock';
 import Gear from '@gravity-ui/icons/Gear';
@@ -11,53 +10,20 @@ import Person from '@gravity-ui/icons/Person';
 import Persons from '@gravity-ui/icons/Persons';
 import ShieldCheck from '@gravity-ui/icons/ShieldCheck';
 import QRCode from 'qrcode';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { call, codeOf, problem } from './api';
 import type { Account, AgentToken, Team, TeamRole } from './api';
-import { container, followRoute, pathFor } from './site';
+import { SidebarLayout } from './sidebar-layout';
+import { followRoute, pathFor } from './site';
 import type { Route } from './site';
 import {
   Choice, CodeField, ConfirmButton, CopyButton, Empty, Loaded, Notice, PageLink, Panel, Secret, State, TaskFeedback, readForm, useApp, useLoad, useTask, useTime,
 } from './ui';
 
-// The instance console keeps its tabs in the address.
-export function TabbedPage({ title, subtitle, aside, tabs, route, banner, children }: {
-  title: string; subtitle?: ReactNode; aside?: ReactNode; tabs: Array<{ id: string; label: string }>; route: Route; banner?: ReactNode; children: ReactNode;
-}) {
-  const { navigate, language } = useApp();
-  const tab = tabs.some(({ id }) => id === route.tab) ? route.tab! : tabs[0]!.id;
-  const list = useRef<HTMLDivElement>(null);
-  // On a narrow screen the tab list scrolls, so the open tab is brought into view.
-  useEffect(() => {
-    list.current?.querySelector('[role="tab"][aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, [tab]);
-  return <main className={`${container} flex-1 py-8 md:py-12`}>
-    <div className="grid min-w-0 gap-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="grid min-w-0 gap-1">
-          <h1 className="text-balance text-3xl font-semibold tracking-tight">{title}</h1>
-          {subtitle && <p className="text-muted wrap-anywhere">{subtitle}</p>}
-        </div>
-        {aside}
-      </div>
-      {banner}
-      <Tabs className="min-w-0" selectedKey={tab} onSelectionChange={key => navigate({ language, section: route.section, tab: key === tabs[0]!.id ? undefined : String(key) })}>
-        <Tabs.ListContainer>
-          <Tabs.List aria-label={title} ref={list}>
-            {tabs.map(({ id, label }) => <Tabs.Tab key={id} id={id} className="whitespace-nowrap">{label}<Tabs.Indicator /></Tabs.Tab>)}
-          </Tabs.List>
-        </Tabs.ListContainer>
-        <Tabs.Panel id={tab} className="grid min-w-0 gap-5 px-0 pt-5">{children}</Tabs.Panel>
-      </Tabs>
-    </div>
-  </main>;
-}
-
 export function Workspace({ route }: { route: Route }) {
   const { t, account, refresh } = useApp();
   const signOut = useTask();
-  const [drawerOpen, setDrawerOpen] = useState(false);
   if (!account) return null;
   const pages = [
     { id: undefined, label: t('Overview', '概览'), icon: House, content: <Overview /> },
@@ -69,64 +35,26 @@ export function Workspace({ route }: { route: Route }) {
     { id: 'settings', label: t('Settings', '设置'), icon: Gear, content: route.accountManagement ? <AccountManagement /> : <Preferences /> },
   ];
   const active = pages.find(({ id }) => id === route.tab) ?? pages[0]!;
-  const navigation = t('Account navigation', '账号中心导航');
-  const sidebar = <>
-    <nav aria-label={navigation} className="min-h-0 grow overflow-y-auto">
-      <ul className="grid gap-1">
-        {pages.map(({ id, label, icon: Icon }) => <li key={id ?? 'overview'}>
-          <PageLink to={{ section: 'workspace', tab: id }} className="workspace-nav-link"
-            {...(id === active.id ? { 'aria-current': 'page' } : {})} onClick={() => setDrawerOpen(false)}>
-            <Icon width={16} height={16} aria-hidden="true" />{label}
-          </PageLink>
-        </li>)}
-        {account.instanceRole && <li className="mt-2 border-t border-separator pt-2">
-          <PageLink to={{ section: 'admin' }} className="workspace-nav-link">
-            <ShieldCheck width={16} height={16} aria-hidden="true" />{t('Instance console', '实例管理台')}
-          </PageLink>
-        </li>}
-      </ul>
-    </nav>
-    <div className="border-t border-separator pt-2">
-      <AccountMenu account={account} busy={Boolean(signOut.pending)} onSignOut={() => {
-        setDrawerOpen(false);
-        void signOut.run('logout', async () => {
-          await call('/account/logout', {});
-          await refresh();
-        });
-      }} />
-    </div>
-  </>;
-  return <div className="grid flex-1 grid-cols-[auto_minmax(0,1fr)]">
-    <aside className="workspace-rail">
-      <Drawer isOpen={drawerOpen} onOpenChange={setDrawerOpen}>
-        <Button size="sm" variant="ghost" isIconOnly className="md:hidden" aria-label={t('Open account navigation', '打开账号中心导航')}>
-          <Bars width={18} height={18} aria-hidden="true" />
-        </Button>
-        <Drawer.Backdrop>
-          <Drawer.Content placement="left" className="max-w-64">
-            <Drawer.Dialog className="flex min-h-0 flex-col">
-              <Drawer.Header>
-                <Drawer.Heading>{t('Account center', '账号中心')}</Drawer.Heading>
-                <Drawer.CloseTrigger aria-label={t('Close navigation', '关闭导航')} />
-              </Drawer.Header>
-              <Drawer.Body className="flex min-h-0 flex-1 flex-col gap-3">{sidebar}</Drawer.Body>
-            </Drawer.Dialog>
-          </Drawer.Content>
-        </Drawer.Backdrop>
-      </Drawer>
-      <div className="hidden min-h-0 flex-1 flex-col gap-3 md:flex">{sidebar}</div>
-    </aside>
-    <main className={`${container} grid min-w-0 content-start gap-5 py-8 md:py-12`}>
-      {route.accountManagement && <PageLink to={{ section: 'workspace', tab: 'settings' }} className="justify-self-start">
-        {t('Back to settings', '返回设置')}
-      </PageLink>}
-      <h1 className="text-balance text-3xl font-semibold tracking-tight">
-        {route.accountManagement ? t('Account management', '账号管理') : active.id ? active.label : t('Account center', '账号中心')}
-      </h1>
-      <TaskFeedback task={signOut} />
-      {active.content}
-    </main>
-  </div>;
+  const title = t('Account center', '账号中心');
+  return <SidebarLayout title={title} navigation={t('Account navigation', '账号中心导航')}
+    openNavigation={t('Open account navigation', '打开账号中心导航')} section="workspace" pages={pages} activeTab={active.id}
+    secondary={account.instanceRole ? { to: { section: 'admin' }, icon: ShieldCheck, label: t('Instance console', '实例管理台') } : undefined}
+    footer={closeNavigation => <AccountMenu account={account} busy={Boolean(signOut.pending)} onSignOut={() => {
+      closeNavigation();
+      void signOut.run('logout', async () => {
+        await call('/account/logout', {});
+        await refresh();
+      });
+    }} />}>
+    {route.accountManagement && <PageLink to={{ section: 'workspace', tab: 'settings' }} className="justify-self-start">
+      {t('Back to settings', '返回设置')}
+    </PageLink>}
+    <h1 className="text-balance text-3xl font-semibold tracking-tight">
+      {route.accountManagement ? t('Account management', '账号管理') : active.id ? active.label : title}
+    </h1>
+    <TaskFeedback task={signOut} />
+    {active.content}
+  </SidebarLayout>;
 }
 
 function AccountMenu({ account, onSignOut, busy }: { account: Account; onSignOut: () => void; busy: boolean }) {

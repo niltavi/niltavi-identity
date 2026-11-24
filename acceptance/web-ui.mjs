@@ -201,8 +201,14 @@ await journey('console write: register an application, credentials shown once', 
   await owner.getByRole('heading', { level: 1, name: 'Instance console' }).waitFor();
   await owner.getByText('You are the owner').waitFor();
   assert.equal(await owner.getByText('Outgoing mail is not configured').count(), 0);
-  await owner.getByRole('tab', { name: 'Applications' }).click();
+  const navigation = owner.getByRole('navigation', { name: 'Instance console navigation' });
+  await expect(navigation.getByRole('link', { name: 'Overview' })).toHaveAttribute('aria-current', 'page');
+  const sidebar = await navigation.boundingBox();
+  const content = await owner.getByRole('main').boundingBox();
+  assert.ok(sidebar && content && sidebar.x + sidebar.width <= content.x);
+  await navigation.getByRole('link', { name: 'Applications' }).click();
   await owner.waitForURL(origin + '/admin/applications');
+  await expect(navigation.getByRole('link', { name: 'Applications' })).toHaveAttribute('aria-current', 'page');
   await owner.getByLabel('Application ID').fill(`notes-${run}`);
   await owner.getByLabel('Name').fill('Notes');
   await owner.getByLabel('Address (https://…)').fill(`https://notes-${run}.example.test/`);
@@ -215,14 +221,53 @@ await journey('console write: register an application, credentials shown once', 
   assert.equal(await owner.locator('[data-secret="client-secret"]').count(), 0);
   await owner.locator(`[data-application="notes-${run}"]`).getByRole('button', { name: 'Disable' }).click();
   await owner.locator(`[data-application="notes-${run}"]`).getByText('Disabled').waitFor();
-  // A deep link to a tab opens that tab, and the browser's back button returns to the previous one.
+  // Admin pages have direct links and participate in browser history.
   await owner.goto(origin + '/admin/audit');
   await owner.getByRole('grid', { name: 'Audit log' }).waitFor();
   await owner.getByText('Application registered').first().waitFor();
-  await owner.getByRole('tab', { name: 'Teams' }).click();
+  await navigation.getByRole('link', { name: 'Teams' }).click();
   await owner.waitForURL(origin + '/admin/teams');
   await owner.goBack();
   await owner.getByRole('grid', { name: 'Audit log' }).waitFor();
+  await expect(navigation.getByRole('link', { name: 'Audit log' })).toHaveAttribute('aria-current', 'page');
+  await owner.goForward();
+  await expect(navigation.getByRole('link', { name: 'Teams' })).toHaveAttribute('aria-current', 'page');
+});
+
+await journey('console navigation opens from the left and works by keyboard on mobile', async () => {
+  const page = await session({ viewport: { width: 320, height: 800 }, colorScheme: 'dark' });
+  await page.context().addCookies(await owner.context().cookies());
+  await page.goto(origin + '/zh/admin/mail');
+  await page.getByRole('heading', { name: '发信' }).waitFor();
+  const trigger = page.getByRole('button', { name: '打开实例管理台导航' });
+  await trigger.press('Enter');
+  const drawer = page.getByRole('dialog', { name: '实例管理台' });
+  await expect(drawer.getByRole('link', { name: '发信' })).toHaveAttribute('aria-current', 'page');
+  await expect(drawer).toHaveAttribute('data-placement', 'left');
+  await noOverflow(page, 'console navigation at 320px');
+  await page.screenshot({ path: join(shots, 'admin-mobile-sidebar.png'), animations: 'disabled' });
+  await drawer.getByRole('link', { name: '团队' }).press('Enter');
+  await page.waitForURL(origin + '/zh/admin/teams');
+  assert.equal(await page.evaluate(() => performance.getEntriesByType('navigation')[0].name), origin + '/zh/admin/mail');
+  await drawer.waitFor({ state: 'hidden' });
+  await expect(trigger).toBeFocused();
+  await page.getByRole('button', { name: '语言' }).click();
+  await page.getByRole('menuitem', { name: 'English' }).click();
+  await page.waitForURL(origin + '/admin/teams');
+  assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
+  const englishTrigger = page.getByRole('button', { name: 'Open instance console navigation' });
+  await page.setViewportSize({ width: 767, height: 800 });
+  await expect(englishTrigger).toBeVisible();
+  await page.setViewportSize({ width: 768, height: 800 });
+  await expect(englishTrigger).toBeHidden();
+  const navigation = page.getByRole('navigation', { name: 'Instance console navigation' });
+  await expect(navigation.getByRole('link', { name: 'Teams' })).toHaveAttribute('aria-current', 'page');
+  await noOverflow(page, 'console navigation at 768px');
+  await page.setViewportSize({ width: 320, height: 800 });
+  await englishTrigger.press('Enter');
+  await page.getByRole('dialog', { name: 'Instance console' }).getByRole('link', { name: 'Account center' }).press('Enter');
+  await page.waitForURL(origin + '/workspace');
+  await page.context().close();
 });
 
 await journey('register with mail: password errors only after validation, 6-digit code, signed in', async () => {
@@ -425,14 +470,15 @@ await journey('console is read-only in a new session until a code unlocks it', a
   await page.context().close();
 });
 
-await journey('console: remove outgoing mail, banner appears on every tab', async () => {
+await journey('console: remove outgoing mail, banner appears on every page', async () => {
   await owner.goto(origin + '/zh/admin/mail');
   await owner.getByRole('button', { name: '移除发信配置' }).click();
   await owner.getByRole('button', { name: '确认移除' }).click();
   await owner.getByText('未配置发信。').waitFor();
   await owner.screenshot({ path: join(shots, 'admin-mail-none-zh.png'), fullPage: true });
-  for (const tab of ['概览', '账号', '团队', '应用', '审计日志']) {
-    await owner.getByRole('tab', { name: tab }).click();
+  const navigation = owner.getByRole('navigation', { name: '实例管理台导航' });
+  for (const label of ['概览', '账号', '团队', '应用', '审计日志']) {
+    await navigation.getByRole('link', { name: label, exact: true }).click();
     await owner.getByText('未配置发信。').waitFor();
     await owner.getByRole('link', { name: '配置发信' }).waitFor();
   }
@@ -645,7 +691,7 @@ await journey('expired sign-in request offers the way back', async () => {
   await page.context().close();
 });
 
-await journey('console: add outgoing mail again from the mail tab', async () => {
+await journey('console: add outgoing mail again from the mail page', async () => {
   await owner.goto(origin + '/admin/mail');
   await owner.getByLabel('SMTP server').fill('127.0.0.1');
   await owner.getByLabel('Port').fill(smtpPort);
@@ -657,7 +703,7 @@ await journey('console: add outgoing mail again from the mail tab', async () => 
   await owner.getByRole('button', { name: 'Confirm and save' }).click();
   await owner.getByText('Working').waitFor();
   assert.equal(await owner.getByText('Outgoing mail is not configured').count(), 0);
-  await owner.getByRole('tab', { name: 'Overview' }).click();
+  await owner.getByRole('navigation', { name: 'Instance console navigation' }).getByRole('link', { name: 'Overview' }).click();
   await choose(owner, /Who can register/, 'Invite-only');
   await owner.getByText('Registration setting saved.').waitFor();
   const page = await session();
