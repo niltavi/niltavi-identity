@@ -1,4 +1,4 @@
-import { Button, Checkbox, Form, Input, Label, Skeleton, TextField } from '@heroui/react';
+import { Button, Checkbox, FieldError, Form, Input, Label, Skeleton, TextField } from '@heroui/react';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { RequestFailure, call, codeOf, forgetLinkToken, linkToken, problem } from './api';
@@ -50,39 +50,70 @@ export function SignIn() {
   const [codeSentTo, setCodeSentTo] = useState<string>();
   const [codeError, setCodeError] = useState<string>();
   const [emailError, setEmailError] = useState<string>();
+  const [pwEmailError, setPwEmailError] = useState<string>();
+  const [pwMessage, setPwMessage] = useState<string>();
+  const [pwPending, setPwPending] = useState(false);
+  const pwBusy = useRef(false);
   const passwordless = settings?.passwordlessAvailable;
 
-  if (codeSentTo) {
-    return <Narrow title={t('Check your email', '查收验证码')}>
-      <p className="text-muted wrap-anywhere">{t(`We sent a 6-digit code to ${codeSentTo}. It is valid for 15 minutes.`, `我们向 ${codeSentTo} 发送了 6 位验证码，15 分钟内有效。`)}</p>
-      <TaskFeedback task={task} />
-      <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
-        const field = readForm(event);
-        setCodeError(undefined);
-        void task.run('verify', async () => {
-          try {
-            await call('/account/login-verify', { code: field('code').trim() });
-            await refresh();
-          } catch (failure) {
-            if (codeOf(failure) !== 'invalid_code') throw failure;
-            setCodeError(problem(failure, language));
-          }
-        });
-      }}>
-        <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)} />
-        <Button type="submit" className="w-full" isPending={task.pending === 'verify'}>{t('Sign in', '登录')}</Button>
-      </Form>
-      <div className="flex flex-wrap gap-2">
-        <Button variant="tertiary" size="sm" onPress={() => { setCodeSentTo(undefined); task.setError(undefined); }}>{t('Use a different email', '换一个邮箱')}</Button>
-        <Button variant="tertiary" size="sm" onPress={() => { setCodeSentTo(undefined); setMode('password'); task.setError(undefined); }}>{t('Sign in with password', '用密码登录')}</Button>
-      </div>
-    </Narrow>;
+  function switchMode(next: 'password' | 'code') {
+    if (next === mode) return;
+    setMode(next);
+    setCodeSentTo(undefined);
+    setCodeError(undefined);
+    setEmailError(undefined);
+    setPwEmailError(undefined);
+    setPwMessage(undefined);
+    task.setError(undefined);
   }
 
-  if (passwordless && mode === 'code') {
-    return <Narrow title={t('Sign in', '登录')}>
-      <TaskFeedback task={task} />
-      <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
+  const step = mode === 'password' ? 'password' : codeSentTo ? 'verify' : 'email';
+
+  return <section className="niltavi-email-password">
+    <h1 className="text-balance text-2xl font-semibold tracking-tight">{t('Sign in', '登录')}</h1>
+    {passwordless && <div className="niltavi-auth-modes" role="tablist">
+      <button type="button" className="niltavi-auth-mode" role="tab" aria-selected={mode === 'password'}
+        onClick={() => switchMode('password')}>{t('Password', '密码登录')}</button>
+      <button type="button" className="niltavi-auth-mode" role="tab" aria-selected={mode === 'code'}
+        onClick={() => switchMode('code')}>{t('Verification code', '验证码登录')}</button>
+    </div>}
+    {mode === 'code' && <TaskFeedback task={task} />}
+    <div key={step} className="nt-fade-up grid gap-4">
+      {step === 'password' && <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
+        const field = readForm(event);
+        if (pwBusy.current) return;
+        pwBusy.current = true;
+        setPwPending(true);
+        setPwEmailError(undefined);
+        setPwMessage(undefined);
+        void (async () => {
+          try {
+            await call('/account/login', { email: field('email').trim(), password: field('password') });
+            await refresh();
+          } catch (failure) {
+            if (codeOf(failure) === 'invalid_email') setPwEmailError(problem(failure, language));
+            else setPwMessage(problem(failure, language));
+          } finally {
+            pwBusy.current = false;
+            setPwPending(false);
+          }
+        })();
+      }}>
+        <fieldset className="niltavi-email-password__fields">
+          <TextField name="email" type="email" autoComplete="username" isRequired isInvalid={Boolean(pwEmailError)} onChange={() => setPwEmailError(undefined)}>
+            <Label>{t('Email', '邮箱')}</Label>
+            <Input className="w-full min-w-0" />
+            <FieldError>{pwEmailError}</FieldError>
+          </TextField>
+          <TextField name="password" type="password" autoComplete="current-password" isRequired>
+            <Label>{t('Password', '密码')}</Label>
+            <Input className="w-full min-w-0" />
+          </TextField>
+          <Button type="submit" isPending={pwPending} className="w-full">{t('Sign in', '登录')}</Button>
+        </fieldset>
+        {pwMessage && <p role="alert">{pwMessage}</p>}
+      </Form>}
+      {step === 'email' && <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
         const email = readForm(event)('email').trim();
         setEmailError(undefined);
         void task.run('send-code', async () => {
@@ -101,29 +132,33 @@ export function SignIn() {
         </TextField>
         {emailError && <p role="alert">{emailError}</p>}
         <Button type="submit" className="w-full" isPending={task.pending === 'send-code'}>{t('Send verification code', '发送验证码')}</Button>
-      </Form>
-      <div className="flex flex-wrap gap-x-5 gap-y-2">
-        <Button variant="tertiary" size="sm" onPress={() => setMode('password')}>{t('Sign in with password', '用密码登录')}</Button>
-        {settings?.registrationAvailable && <PageLink to={{ section: 'register' }}>{t('Create an account', '创建账号')}</PageLink>}
-      </div>
-    </Narrow>;
-  }
-
-  return <CredentialsForm mode="sign-in" title={t('Sign in', '登录')} submit={t('Sign in', '登录')}
-    onSubmit={async (email, password) => {
-      try {
-        await call('/account/login', { email, password });
-        await refresh();
-      } catch (failure) {
-        if (codeOf(failure) === 'invalid_email') return { email: problem(failure, language) };
-        return { message: problem(failure, language) };
-      }
-    }}
-    footer={<>
-      {passwordless && <Button variant="tertiary" size="sm" onPress={() => setMode('code')}>{t('Sign in with verification code', '用验证码登录')}</Button>}
+      </Form>}
+      {step === 'verify' && <>
+        <p className="text-muted wrap-anywhere">{t(`We sent a 6-digit code to ${codeSentTo}. It is valid for 15 minutes.`, `我们向 ${codeSentTo} 发送了 6 位验证码，15 分钟内有效。`)}</p>
+        <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
+          const field = readForm(event);
+          setCodeError(undefined);
+          void task.run('verify', async () => {
+            try {
+              await call('/account/login-verify', { code: field('code').trim() });
+              await refresh();
+            } catch (failure) {
+              if (codeOf(failure) !== 'invalid_code') throw failure;
+              setCodeError(problem(failure, language));
+            }
+          });
+        }}>
+          <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)} />
+          <Button type="submit" className="w-full" isPending={task.pending === 'verify'}>{t('Sign in', '登录')}</Button>
+        </Form>
+        <Button variant="tertiary" size="sm" onPress={() => { setCodeSentTo(undefined); task.setError(undefined); }}>{t('Use a different email', '换一个邮箱')}</Button>
+      </>}
+    </div>
+    <div className="flex flex-wrap gap-x-5 gap-y-2">
       {settings?.registrationAvailable && <PageLink to={{ section: 'register' }}>{t('Create an account', '创建账号')}</PageLink>}
       <PageLink to={{ section: 'recover' }}>{t('Forgot password', '忘记密码')}</PageLink>
-    </>} />;
+    </div>
+  </section>;
 }
 
 const continuation = /^\/interaction\/[A-Za-z0-9_-]{16,128}\/registered$/;
@@ -189,38 +224,40 @@ export function Register() {
 
   if (verifying) {
     return <Narrow title={t('Check your email', '查收验证码')}>
-      <p className="text-muted wrap-anywhere">{t(`We sent a 6-digit code to ${verifying}. It is valid for 15 minutes.`, `我们向 ${verifying} 发送了 6 位验证码，15 分钟内有效。`)}</p>
-      <TaskFeedback task={task} />
-      <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
-        const field = readForm(event);
-        setCodeError(undefined);
-        void task.run('verify', async () => {
-          try {
-            const result = await call<{ continueTo?: string }>('/account/verify', { email: verifying, code: field('code').trim() });
-            if (result.continueTo && continuation.test(result.continueTo)) return window.location.assign(result.continueTo);
-            await autoAcceptInvitation();
-            await refresh();
-          } catch (failure) {
-            const code = codeOf(failure);
-            if (code === 'registration_unavailable' || code === 'invitation_required') setVerifying(undefined);
-            if (code !== 'invalid_code') throw failure;
-            setCodeError(problem(failure, language));
-          }
-        });
-      }}>
-        <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)} />
-        <Button type="submit" className="w-full" isPending={task.pending === 'verify'}>{t('Verify and continue', '验证并继续')}</Button>
-      </Form>
-      <div className="flex flex-wrap gap-2">
-        <Button variant="tertiary" size="sm" isPending={task.pending === 'resend'} onPress={() => void task.run('resend', async () => {
-          try { await call('/account/resend', {}); }
-          catch (failure) {
-            if (codeOf(failure) === 'enrollment_expired') setVerifying(undefined);
-            throw failure;
-          }
-          return t('We sent a new code.', '新的验证码已发送。');
-        })}>{t('Send a new code', '重新发送')}</Button>
-        <Button variant="tertiary" size="sm" onPress={() => { setVerifying(undefined); task.setError(undefined); }}>{t('Use a different email', '换一个邮箱')}</Button>
+      <div className="nt-fade-up grid gap-4">
+        <p className="text-muted wrap-anywhere">{t(`We sent a 6-digit code to ${verifying}. It is valid for 15 minutes.`, `我们向 ${verifying} 发送了 6 位验证码，15 分钟内有效。`)}</p>
+        <TaskFeedback task={task} />
+        <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
+          const field = readForm(event);
+          setCodeError(undefined);
+          void task.run('verify', async () => {
+            try {
+              const result = await call<{ continueTo?: string }>('/account/verify', { email: verifying, code: field('code').trim() });
+              if (result.continueTo && continuation.test(result.continueTo)) return window.location.assign(result.continueTo);
+              await autoAcceptInvitation();
+              await refresh();
+            } catch (failure) {
+              const code = codeOf(failure);
+              if (code === 'registration_unavailable' || code === 'invitation_required') setVerifying(undefined);
+              if (code !== 'invalid_code') throw failure;
+              setCodeError(problem(failure, language));
+            }
+          });
+        }}>
+          <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)} />
+          <Button type="submit" className="w-full" isPending={task.pending === 'verify'}>{t('Verify and continue', '验证并继续')}</Button>
+        </Form>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="tertiary" size="sm" isPending={task.pending === 'resend'} onPress={() => void task.run('resend', async () => {
+            try { await call('/account/resend', {}); }
+            catch (failure) {
+              if (codeOf(failure) === 'enrollment_expired') setVerifying(undefined);
+              throw failure;
+            }
+            return t('We sent a new code.', '新的验证码已发送。');
+          })}>{t('Send a new code', '重新发送')}</Button>
+          <Button variant="tertiary" size="sm" onPress={() => { setVerifying(undefined); task.setError(undefined); }}>{t('Use a different email', '换一个邮箱')}</Button>
+        </div>
       </div>
     </Narrow>;
   }
@@ -300,9 +337,11 @@ export function Recover() {
   }
   if (sentTo) {
     return <Narrow title={t('Check your email', '查收邮件')}>
-      <p className="wrap-anywhere" role="status">{t(`If ${sentTo} has an account with a verified address, we sent it a link to choose a new password. The link works for 30 minutes.`,
-        `如果 ${sentTo} 对应一个邮箱已验证的账号，我们已向它发送了重置密码的链接，30 分钟内有效。`)}</p>
-      {back}
+      <div className="nt-fade-up grid gap-4">
+        <p className="wrap-anywhere" role="status">{t(`If ${sentTo} has an account with a verified address, we sent it a link to choose a new password. The link works for 30 minutes.`,
+          `如果 ${sentTo} 对应一个邮箱已验证的账号，我们已向它发送了重置密码的链接，30 分钟内有效。`)}</p>
+        {back}
+      </div>
     </Narrow>;
   }
   return <Narrow title={t('Reset your password', '重置密码')}>
