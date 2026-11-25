@@ -64,4 +64,50 @@
     flex: 1;
     border: 0;
   }
+
+  .niltavi-auth-modes {
+    display: flex;
+    gap: calc(var(--spacing) * 5);
+    border-block-end: var(--border-width) solid var(--separator);
+  }
+
+  .niltavi-auth-mode {
+    position: relative;
+    padding-block-end: calc(var(--spacing) * 2);
+    font: inherit;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--muted);
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding-inline: 0;
+    transition: color var(--motion-fast) var(--motion-ease);
+  }
+
+  .niltavi-auth-mode:hover { color: var(--foreground); }
+  .niltavi-auth-mode[aria-selected="true"] { color: var(--foreground); }
+
+  .niltavi-auth-mode::after {
+    content: '';
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    height: 2px;
+    background: var(--accent);
+    transform: scaleX(0);
+    transform-origin: center;
+    transition: transform var(--motion-base) var(--motion-ease-fluid);
+  }
+
+  .niltavi-auth-mode[aria-selected="true"]::after {
+    transform: scaleX(1);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .niltavi-auth-mode, .niltavi-auth-mode::after { transition: none; }
+  }
+
+  [data-reduce-motion="true"] .niltavi-auth-mode,
+  [data-reduce-motion="true"] .niltavi-auth-mode::after { transition: none; }
 }
