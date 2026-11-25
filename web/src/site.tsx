@@ -1,5 +1,4 @@
 import { Link, RouterProvider, buttonVariants } from '@heroui/react';
-import ShieldCheck from '@gravity-ui/icons/ShieldCheck';
 import { useLayoutEffect, useState } from 'react';
 import type { ComponentProps, MouseEvent } from 'react';
 import { ProductFooter, ProductHeader } from '../vendor/niltavi-ui/product/ProductHeader';
@@ -107,7 +106,7 @@ export function BrandHeader({ route, navigate, publicPage = false, onLanguage }:
     else window.location.assign(href);
   }
   const header = <ProductHeader
-    brand={{ name: 'Identity', href: pathFor(brandRoute), symbol: <ShieldCheck width={40} height={40} />,
+    brand={{ name: 'Identity', href: pathFor(brandRoute), symbol: <img src="/identity-assets/identity-logo-icon.svg" width={40} height={40} alt="" />,
       onClick: event => followRoute(event, brandRoute, navigate) }}
     labels={labels} theme={theme} onToggleTheme={toggle} githubHref={repository} locale={language} locales={locales}
     variant={publicPage ? 'site' : 'app'}

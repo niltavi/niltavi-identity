@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000">
+  <title>Identity</title>
+  <style>@media (prefers-color-scheme: dark) { svg > circle, svg > g, svg > path { fill: #fff; } }</style>
+  <defs>
+    <mask id="overlap" maskUnits="userSpaceOnUse" x="0" y="0" width="1000" height="1000">
+      <rect width="1000" height="1000" fill="#fff" />
+      <path fill="#000" d="M343.14 660.92 A12 12 0 0 1 354.42 653
+        L644.24 653 A12 12 0 0 1 655.6 668.87
+        L647.77 691.87 A12 12 0 0 1 636.41 700
+        L346.1 700 A12 12 0 0 1 334.82 683.92Z" />
+    </mask>
+  </defs>
+  <circle cx="561" cy="238" r="144" />
+  <g fill="#000" mask="url(#overlap)">
+    <path d="M414.89 437.37 A26 26 0 0 1 439.41 420
+      L825.29 420 A26 26 0 0 1 849.81 454.63
+      L767.11 689.63 A26 26 0 0 1 742.59 707
+      L356.71 707 A26 26 0 0 1 332.19 672.37Z" />
+    <path d="M213.9 663.4 A26 26 0 0 1 238.44 646
+      L634.34 646 A26 26 0 0 1 658.88 680.6
+      L588.1 882.6 A26 26 0 0 1 563.56 900
+      L167.66 900 A26 26 0 0 1 143.12 865.4Z" />
+  </g>
+</svg>

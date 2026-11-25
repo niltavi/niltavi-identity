@@ -14,7 +14,7 @@ const migrateTheme = 'try { const old = localStorage.getItem("identity.theme"); 
   '!localStorage.getItem(' + JSON.stringify(themeKey) + ')) localStorage.setItem(' + JSON.stringify(themeKey) + ', old); } catch {}';
 
 await Promise.all([
-  ...['niltavi-logo-light.svg', 'niltavi-logo-dark.svg'].map(name =>
+  ...['niltavi-logo-light.svg', 'niltavi-logo-dark.svg', 'identity-logo-icon.svg'].map(name =>
     copyFile(new URL('./src/brand/' + name, import.meta.url), new URL(name, assets))),
   copyFile(new URL('../docs/en/for-agents.md', import.meta.url), new URL('for-agents.md', assets)),
   copyFile(new URL('../docs/en/authentication.md', import.meta.url), new URL('authentication.md', assets)),
