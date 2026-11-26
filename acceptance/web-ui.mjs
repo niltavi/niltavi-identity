@@ -926,30 +926,36 @@ await journey('shared account menus work across widths, themes, and languages', 
   }
 });
 
-await journey('turning off two-step verification requires opening and confirming a dialog', async () => {
+await journey('turning off two-step verification sends an email code', async () => {
   await owner.goto(origin + '/workspace/security');
   const manage = owner.getByRole('button', { name: 'Manage two-step verification' });
   const dialog = owner.getByRole('dialog', { name: 'Turn off two-step verification?' });
-  const code = owner.getByLabel('Current code from your authenticator app');
   const confirm = owner.getByRole('button', { name: 'Turn off two-step verification' });
   await expect(owner.getByText('On', { exact: true })).toBeVisible();
   await expect(confirm).toHaveCount(0);
-  await expect(code).toHaveCount(0);
 
   await manage.press('Enter');
   await expect(dialog).toBeVisible();
-  await code.fill('000000');
-  await confirm.click();
-  await expect(dialog.getByText('The code is incorrect or has expired.')).toBeVisible();
+  const sendButton = dialog.getByRole('button', { name: 'Send verification code' });
+  await expect(sendButton).toBeVisible();
+
   await dialog.getByRole('button', { name: 'Cancel' }).click();
   await expect(dialog).toBeHidden();
   await expect(manage).toBeFocused();
   await expect(owner.getByText('On', { exact: true })).toBeVisible();
 
   await manage.click();
-  await expect(code).toHaveValue('');
-  await expect(dialog.getByText('The code is incorrect or has expired.')).toHaveCount(0);
-  await code.fill(await authenticatorCode());
+  const since = Date.now();
+  await sendButton.click();
+  const code = dialog.getByLabel('Verification code');
+  await expect(code).toBeVisible();
+
+  await code.fill('000000');
+  await confirm.click();
+  await expect(dialog.getByText('The code is incorrect or has expired.')).toBeVisible();
+
+  const emailCode = await codeIn(people.owner.email, since);
+  await code.fill(emailCode);
   await confirm.click();
   await expect(dialog).toBeHidden();
   await expect(owner.getByText('Two-step verification is off.')).toBeVisible();

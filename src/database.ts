@@ -50,7 +50,8 @@ export async function audit(db: Queryable, action: string, target: string, actor
 }
 
 const migrationFiles = ['schema.sql', 'schema-browser.sql', 'schema-enrollment.sql', 'schema-registration-intents.sql',
-  'schema-teams.sql', 'schema-email-codes.sql', 'schema-registration-policy.sql', 'schema-application-branding.sql'];
+  'schema-teams.sql', 'schema-email-codes.sql', 'schema-registration-policy.sql', 'schema-application-branding.sql',
+  'schema-disable-2fa-codes.sql'];
 export const schemaVersion = migrationFiles.length;
 
 // Serialize first-account ownership, operator provisioning and registration policy changes.
