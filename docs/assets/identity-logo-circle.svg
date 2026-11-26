@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000">
+  <title>Niltavi Identity</title>
+  <defs>
+    <path id="upper-panel" d="M414.89 437.37 A26 26 0 0 1 439.41 420
+      L825.29 420 A26 26 0 0 1 849.81 454.63
+      L767.11 689.63 A26 26 0 0 1 742.59 707
+      L356.71 707 A26 26 0 0 1 332.19 672.37Z" />
+    <path id="lower-panel" d="M213.9 663.4 A26 26 0 0 1 238.44 646
+      L634.34 646 A26 26 0 0 1 658.88 680.6
+      L588.1 882.6 A26 26 0 0 1 563.56 900
+      L167.66 900 A26 26 0 0 1 143.12 865.4Z" />
+    <clipPath id="overlap">
+      <use href="#lower-panel" />
+    </clipPath>
+  </defs>
+  <circle cx="500" cy="500" r="480" fill="#f5f1e6" stroke="#dfd8c7" stroke-width="12" />
+  <g transform="translate(110 110) scale(.78)">
+    <circle cx="561" cy="238" r="144" fill="#ffca00" />
+    <use href="#upper-panel" fill="#0098ba" />
+    <use href="#lower-panel" fill="#0098ba" />
+    <use href="#upper-panel" fill="#006d73" clip-path="url(#overlap)" />
+  </g>
+</svg>
