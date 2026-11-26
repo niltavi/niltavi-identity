@@ -5,9 +5,12 @@ export const verificationSubject = 'Your Niltavi Identity verification code';
 
 const brandImage = 'https://identity.niltavi.com/identity-assets/niltavi-logo-light.png';
 const font = 'Arial, Helvetica, sans-serif';
+// Niltava light theme colors resolved to sRGB for email clients.
 const paper = '#f5f1e6';
+const surface = '#f6f3ea';
+const surfaceBorder = '#d5d6cb';
 const ink = '#283e38';
-const muted = '#6a7181';
+const muted = '#56675f';
 const prominentText = `color:${ink};font-size:26px;font-weight:700;line-height:32px`;
 const paragraphLayout = 'max-width:360px;text-wrap:balance';
 const cardWidth = 440;
@@ -47,8 +50,8 @@ function render({ subject, title, introduction, code, actions = [], note }: Noti
     <tr><td align="center" style="padding:32px 16px">
       <!--[if mso]><table role="presentation" width="${cardWidth}" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:${cardWidth}px;table-layout:fixed">
-        <tr><td align="center" bgcolor="#ffffff"
-          style="background:#ffffff;border-radius:16px;padding:28px 16px;color:${muted};font-family:${font};font-size:14px;line-height:22px;overflow-wrap:break-word">
+        <tr><td align="center" bgcolor="${surface}"
+          style="background:${surface};border:1px solid ${surfaceBorder};border-radius:16px;padding:28px 16px;color:${muted};font-family:${font};font-size:14px;line-height:22px;overflow-wrap:break-word">
           <p style="margin:0 0 12px">
             <img src="${brandImage}" width="82" height="30" alt="Niltavi" style="display:inline-block;width:82px;height:30px;vertical-align:middle;border:0">
           </p>
