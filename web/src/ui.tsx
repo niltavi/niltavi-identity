@@ -7,13 +7,12 @@ import Eye from '@gravity-ui/icons/Eye';
 import EyeSlash from '@gravity-ui/icons/EyeSlash';
 import Lock from '@gravity-ui/icons/Lock';
 import Pencil from '@gravity-ui/icons/Pencil';
-import ShieldCheck from '@gravity-ui/icons/ShieldCheck';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { ComponentProps, FormEvent, ReactNode } from 'react';
 import { BannerScene } from './banner';
 import { codeOf, problem } from './api';
 import type { Account, Settings } from './api';
-import { RouteLink } from './site';
+import { IdentityIcon, RouteLink } from './site';
 import type { Language, Navigate, Route } from './site';
 
 export type App = {
@@ -244,7 +243,7 @@ export function AuthLayout({ children, brand, controls }: { children: ReactNode;
         <img className="niltavi-product-footer__light" src="/identity-assets/niltavi-logo-light.svg" alt="Niltavi" width={48} height={18} />
         <img className="niltavi-product-footer__dark" src="/identity-assets/niltavi-logo-dark.svg" alt="Niltavi" width={48} height={18} />
         <a className="nt-authlayout__identity" href="https://identity.niltavi.com/" aria-label="Identity">
-          <ShieldCheck aria-hidden="true" width={16} height={16} />
+          <IdentityIcon size={16} />
         </a>
       </footer>
     </div>

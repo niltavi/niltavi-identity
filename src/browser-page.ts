@@ -8,6 +8,7 @@ const contentTypes: Readonly<Record<string, string>> = {
   '.css': 'text/css; charset=utf-8',
   '.woff2': 'font/woff2',
   '.svg': 'image/svg+xml',
+  '.png': 'image/png',
   '.md': 'text/plain; charset=utf-8',
 };
 

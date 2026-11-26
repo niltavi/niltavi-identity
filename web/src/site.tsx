@@ -1,5 +1,4 @@
 import { Link, RouterProvider, buttonVariants } from '@heroui/react';
-import ShieldCheck from '@gravity-ui/icons/ShieldCheck';
 import { useLayoutEffect, useState } from 'react';
 import type { ComponentProps, MouseEvent } from 'react';
 import { ProductFooter, ProductHeader } from '../vendor/niltavi-ui/product/ProductHeader';
@@ -91,6 +90,12 @@ function useTheme() {
   return { theme, toggle };
 }
 
+export function IdentityIcon({ size }: { size: number }) {
+  return <span aria-hidden="true" className="block bg-current forced-color-adjust-none" style={{
+    width: size, height: size, mask: 'url(/identity-assets/identity-logo-icon.svg) center / contain no-repeat',
+  }} />;
+}
+
 // `onLanguage` is for pages that cannot change address when the language changes, such as a sign-in request in progress.
 export function BrandHeader({ route, navigate, publicPage = false, onLanguage }:
   { route: Route; navigate?: Navigate; publicPage?: boolean; onLanguage?: (language: Language) => void }) {
@@ -107,7 +112,7 @@ export function BrandHeader({ route, navigate, publicPage = false, onLanguage }:
     else window.location.assign(href);
   }
   const header = <ProductHeader
-    brand={{ name: 'Identity', href: pathFor(brandRoute), symbol: <ShieldCheck width={40} height={40} />,
+    brand={{ name: 'Identity', href: pathFor(brandRoute), symbol: <IdentityIcon size={40} />,
       onClick: event => followRoute(event, brandRoute, navigate) }}
     labels={labels} theme={theme} onToggleTheme={toggle} githubHref={repository} locale={language} locales={locales}
     variant={publicPage ? 'site' : 'app'}
@@ -123,7 +128,7 @@ export function BrandFooter() {
 
 export function Website({ language, navigate }: { language: Language; navigate: Navigate }) {
   const labels = copy[language];
-  return <main className={`${container} flex flex-1 items-center py-16 sm:py-24`}>
+  return <main className={`${container} grid flex-1 content-center gap-8 py-12 sm:py-16 md:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] md:items-center lg:gap-16`}>
     <div className="grid max-w-2xl gap-6">
       <h1 className="text-balance text-4xl font-medium tracking-tight sm:text-5xl lg:text-6xl">
         {language === 'en' ? labels.heading : <><span className="whitespace-nowrap">一个账号，</span><wbr /><span className="whitespace-nowrap">登录多个应用</span></>}
@@ -135,5 +140,7 @@ export function Website({ language, navigate }: { language: Language; navigate: 
           className={buttonVariants({ variant: 'secondary' })}>{labels.register}</RouteLink>
       </div>
     </div>
+    <img className="order-first w-36 justify-self-center sm:w-44 md:order-none md:w-full md:max-w-xs"
+      src="/identity-assets/identity-logo-textured.png" width={1000} height={1000} alt="" />
   </main>;
 }
