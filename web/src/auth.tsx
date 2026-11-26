@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { RequestFailure, call, codeOf, forgetLinkToken, linkToken, problem } from './api';
 import type { AgentToken, Invitation } from './api';
-import { AuthBack, AuthLayout, CodeField, CodeHelp, CredentialsForm, Notice, PageLink, PasswordField, SentTo, StepIndicator, TaskFeedback, passwordLength, readForm, useApp, useTask } from './ui';
+import { AuthBack, AuthLayout, CodeField, CredentialsForm, Notice, PageLink, PasswordField, ResendCodeButton, SentTo, StepIndicator, TaskFeedback, passwordLength, readForm, useApp, useTask } from './ui';
 import type { Navigate, Route } from './site';
 import type { Language } from './site';
 
@@ -178,9 +178,9 @@ export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}
       }}>
         <SentTo label={t('Code sent to', '验证码已发送至')} value={codeSentTo!} onEdit={() => { setCodeSentTo(undefined); setCodeError(undefined); task.setError(undefined); }} />
         <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)}
-          onComplete={verifyCode} />
-        <CodeHelp error={codeError} onResend={() => void task.run('resend', () =>
-          submit('/account/login-code', { email: codeSentTo!, ...codeFields }))} isPending={task.pending === 'resend'} />
+          onComplete={verifyCode}
+          action={<ResendCodeButton isPending={task.pending === 'resend'} onResend={() => void task.run('resend', () =>
+            submit('/account/login-code', { email: codeSentTo!, ...codeFields }))} />} />
         <Button type="submit" className="w-full" isPending={task.pending === 'verify'}>{t('Sign in', '登录')}</Button>
       </Form>}
     </div>
@@ -301,15 +301,15 @@ export function Register({ interactionPath }: { interactionPath?: string } = {})
         }}>
           <SentTo label={t('Code sent to', '验证码已发送至')} value={verifying} onEdit={() => { setVerifying(undefined); task.setError(undefined); setCodeError(undefined); }} />
           <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)}
-            onComplete={verify} />
-          <CodeHelp error={codeError} onResend={() => void task.run('resend', async () => {
-            try { await request(resendPath, {}); }
-            catch (failure) {
-              if (codeOf(failure) === 'enrollment_expired') setVerifying(undefined);
-              throw failure;
-            }
-            return t('We sent a new code.', '新的验证码已发送。');
-          })} isPending={task.pending === 'resend'} />
+            onComplete={verify}
+            action={<ResendCodeButton isPending={task.pending === 'resend'} onResend={() => void task.run('resend', async () => {
+              try { await request(resendPath, {}); }
+              catch (failure) {
+                if (codeOf(failure) === 'enrollment_expired') setVerifying(undefined);
+                throw failure;
+              }
+              return t('We sent a new code.', '新的验证码已发送。');
+            })} />} />
           <Button type="submit" className="w-full" isPending={task.pending === 'verify'}>{t('Verify and continue', '验证并继续')}</Button>
         </Form>
         <p className="nt-auth__links nt-auth__foot">{signIn}</p>
@@ -615,11 +615,11 @@ export function Invite() {
                     setCodeError(problem(failure, language));
                   }
                 });
-              }} />
-            <CodeHelp error={codeError} onResend={() => void task.run('resend-code', async () => {
-              await call('/account/email/resend-code', {});
-              return t('We sent a new code.', '新的验证码已发送。');
-            })} isPending={task.pending === 'resend-code'} />
+              }}
+              action={<ResendCodeButton isPending={task.pending === 'resend-code'} onResend={() => void task.run('resend-code', async () => {
+                await call('/account/email/resend-code', {});
+                return t('We sent a new code.', '新的验证码已发送。');
+              })} />} />
             <Button type="button" className="w-full" isPending={task.pending === 'verify-code'} onPress={() => {
               const input = document.querySelector<HTMLInputElement>('.nt-auth__otp input');
               const code = input?.value ?? '';

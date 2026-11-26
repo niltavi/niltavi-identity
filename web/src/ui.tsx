@@ -7,7 +7,7 @@ import Eye from '@gravity-ui/icons/Eye';
 import EyeSlash from '@gravity-ui/icons/EyeSlash';
 import Lock from '@gravity-ui/icons/Lock';
 import Pencil from '@gravity-ui/icons/Pencil';
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState } from 'react';
 import type { ComponentProps, FormEvent, ReactNode } from 'react';
 import { BannerScene } from './banner';
 import { codeOf, problem } from './api';
@@ -183,20 +183,25 @@ export function PasswordField({ label, error, rule, onInput, autoFocus, validate
   </TextField>;
 }
 
-export function CodeField({ label, error, onInput, onComplete }:
-  { label: string; error: string | undefined; onInput: () => void; onComplete?: (value: string) => void }) {
+export function CodeField({ label, error, onInput, onComplete, action }:
+  { label: string; error: string | undefined; onInput: () => void; onComplete?: (value: string) => void; action?: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
+  const id = useId();
+  const errorId = `${id}-error`;
   const [value, setValue] = useState('');
   useEffect(() => { ref.current?.querySelector('input')?.focus(); }, []);
   return <div className="nt-auth__otp" ref={ref}>
-    <Label>{label}</Label>
+    <div className="flex items-center justify-between gap-2">
+      <Label htmlFor={id}>{label}</Label>
+      {action}
+    </div>
     <InputOTP maxLength={6} value={value} isInvalid={Boolean(error)} onChange={v => { setValue(v); onInput(); if (v.length === 6) onComplete?.(v); }}
-      aria-label={label}>
+      id={id} aria-invalid={Boolean(error)} aria-describedby={error ? errorId : undefined}>
       <InputOTP.Group><InputOTP.Slot index={0} /><InputOTP.Slot index={1} /><InputOTP.Slot index={2} /></InputOTP.Group>
       <InputOTP.Separator />
       <InputOTP.Group><InputOTP.Slot index={3} /><InputOTP.Slot index={4} /><InputOTP.Slot index={5} /></InputOTP.Group>
     </InputOTP>
-    {error && <span className="text-danger text-sm">{error}</span>}
+    {error && <span id={errorId} className="text-danger text-sm" role="alert">{error}</span>}
   </div>;
 }
 
@@ -208,12 +213,10 @@ export function SentTo({ label, value, onEdit }: { label: string; value: string;
   </div>;
 }
 
-export function CodeHelp({ error, onResend, isPending = false }: { error: string | undefined; onResend: () => void; isPending?: boolean | undefined }) {
+export function ResendCodeButton({ onResend, isPending }: { onResend: () => void; isPending: boolean }) {
   const { t } = useApp();
-  return <div className="nt-auth__codehelp">
-    {error ? <span className="text-danger text-sm">{error}</span> : <Description>{t('Enter the 6-digit code', '输入 6 位验证码')}</Description>}
-    <Button size="sm" variant="ghost" className="nt-resend" isPending={isPending} onPress={onResend}>{t('Resend code', '重新发送')}</Button>
-  </div>;
+  return <Button type="button" size="sm" variant="ghost" className="shrink-0 bg-transparent px-0 text-link hover:underline"
+    isPending={isPending} onPress={onResend}>{t('Resend code', '重新发送')}</Button>;
 }
 
 type SignInBrand = {
