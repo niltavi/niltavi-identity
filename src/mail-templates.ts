@@ -3,7 +3,7 @@ export type Message = { subject: string; text: string; html: string };
 export const mailSupport = 'support@niltavi.com';
 export const verificationSubject = 'Your Niltavi Identity verification code';
 
-const brandImage = 'https://niltavi.com/favicon-32.png?v=circle1';
+const brandImage = 'https://identity.niltavi.com/identity-assets/niltavi-logo-light.png';
 const font = 'Arial, Helvetica, sans-serif';
 const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;')
   .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
@@ -52,7 +52,7 @@ function render({ subject, title, introduction, code, actions = [], note }: Noti
           <p style="margin:24px 0 0;font-size:14px;color:#616976">Need help? Contact <a href="mailto:${mailSupport}" style="color:#2457a6;text-decoration:underline">${mailSupport}</a>.</p>
         </td></tr>
         <tr><td align="center" style="padding:18px 0 0">
-          <img src="${brandImage}" width="32" height="32" alt="niltavi" style="display:block;width:32px;height:32px;border:0">
+          <img src="${brandImage}" width="82" height="30" alt="Niltavi" style="display:block;width:82px;height:30px;border:0">
         </td></tr>
       </table>
       <!--[if mso]></td></tr></table><![endif]-->
