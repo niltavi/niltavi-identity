@@ -9,7 +9,7 @@ export type RegistrationPolicy = 'open' | 'invite' | 'closed';
 
 export type Settings = {
   initialized: boolean; registrationAvailable: boolean;
-  registrationMode: 'verify-email' | 'unverified-testenv' | 'immediate';
+  registrationMode: 'verify-email' | 'immediate';
   registrationPolicy: RegistrationPolicy; recoveryAvailable: boolean;
   passwordRule: { minimum: number; maximum: number };
   passwordlessAvailable: boolean;

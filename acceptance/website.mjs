@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { firefox, expect } from '@playwright/test';
 
-const origin = new URL(process.argv[2] ?? 'https://identity.testenv.niltavi.com').origin;
+const target = process.argv[2];
+if (!target) throw new Error('Usage: node acceptance/website.mjs <https-origin>');
+const origin = new URL(target).origin;
 const evidence = process.env.IDENTITY_WORKSPACE_EVIDENCE;
 const seed = process.env.IDENTITY_LOCAL_NSS_SEED;
 const profile = await mkdtemp(join(tmpdir(), 'identity-website-profile-'));

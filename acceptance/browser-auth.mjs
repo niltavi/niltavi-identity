@@ -20,7 +20,7 @@ db.searchParams.set('options', `-c search_path=${schema}`);
 const pool = connect(db.href);
 const files = await mkdtemp(join(tmpdir(), 'identity-web-'));
 const issuer = `https://identity.localhost:${process.env.IDENTITY_WEB_TEST_PORT ?? '43863'}`;
-const gateway = 'https://identity.testenv.niltavi.com';
+const gateway = 'https://identity.example.test';
 const cert = await selfsigned.generate([{ name: 'commonName', value: 'identity.localhost' }], {
   algorithm: 'sha256',
   extensions: [{ name: 'basicConstraints', cA: false }, { name: 'extKeyUsage', serverAuth: true },
@@ -111,6 +111,9 @@ try {
   const vanityHost = new URL(gateway).host;
   assert.equal((await http('/.well-known/openid-configuration')).body.issuer, issuer);
   assert.equal((await http('/.well-known/openid-configuration', { host: vanityHost })).body.issuer, gateway);
+  const gatewayConfig = await http('/account/config', { host: vanityHost });
+  assert.equal(gatewayConfig.status, 200);
+  assert.equal(gatewayConfig.body.registrationMode, 'verify-email');
   assert.equal((await http('/account/config', { host: 'unlisted.test' })).status, 421);
   assert.equal((await http('/account/login', { host: vanityHost, body: { email: member, password } })).status, 403);
   const issued = await http('/account/login', { host: vanityHost, origin: gateway, body: { email: member, password } });

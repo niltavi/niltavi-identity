@@ -109,3 +109,20 @@ The audit trail records sign-ins and failed sign-ins, password resets, membershi
 - `self-hosted` is the default.
 - `hosted` requires HTTPS issuers on `niltavi.com` or one of its subdomains. It supports SMTP delivery and can optionally use Tencent SES for verification codes.
 - `acceptance` enables scoped test mailbox domains and scoped account operators for isolated test runs.
+
+For deployments with a second HTTPS origin, set `IDENTITY_GATEWAY_ISSUER` to that origin in an operator-managed configuration. The listener routes by the configured Host and evaluates browser requests against that origin.
+
+To reload TLS certificates without a restart, point `IDENTITY_TLS_LIVE_DIR` to a symlink to a directory containing `fullchain.pem` and `privkey.pem`. Update the symlink atomically when publishing a new certificate. The service checks the new certificate's hostname and validity period before using it.
+
+## Tencent SES verification email
+
+To use Tencent SES for verification codes, mount `IDENTITY_TENCENT_SES_CONFIG_FILE` as a private file readable by Identity. The JSON fields are `secretId`, `secretKey`, optional `token`, `region`, `fromEmail`, numeric `templateId`, and `codeVariable` (defaults to `code`). Identity uses one English template and an authenticated sender in `ap-guangzhou` or `ap-hongkong`. It sends an individual triggered verification message over HTTPS. [SendEmail contract](https://cloud.tencent.com/document/api/1288/51034)
+
+Generate the `CreateEmailTemplate` request with both formats from the same source as the SMTP message:
+
+```sh
+npm run build:service
+node scripts/ses-code-template.mjs > ses-code-template.json
+```
+
+Pass the configured `codeVariable` as the script's first argument if it differs from `code`. Submit the request in the selected SES region, wait for approval, then switch `templateId` to the approved template. Verify placement in authorized personal and business inboxes using the production sender. Confirm that the sending domain's SPF and DKIM setup aligns with DMARC. [CreateEmailTemplate contract](https://cloud.tencent.com/document/api/1288/51042) · [Gmail sender guidelines](https://support.google.com/mail/answer/81126)

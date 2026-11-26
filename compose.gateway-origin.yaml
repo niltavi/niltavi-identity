@@ -1,4 +1,0 @@
-services:
-  identity:
-    environment:
-      IDENTITY_GATEWAY_ISSUER: https://identity.testenv.niltavi.com

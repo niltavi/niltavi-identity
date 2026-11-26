@@ -21,12 +21,6 @@ const enrollmentCookie = '__Host-niltavi-enrollment';
 const enrollmentSeconds = 900;
 const resendSeconds = 60;
 const codeAttempts = 5;
-export const identityTestenvOrigin = 'https://identity.testenv.niltavi.com';
-
-export function testenvSignupAllowed(issuer: URL) {
-  return process.env.IDENTITY_TESTENV_UNVERIFIED_SIGNUP === 'true' && issuer.origin === identityTestenvOrigin;
-}
-
 export type AccountServices = {
   pool: Pool; issuer: URL; web: WebSessions; mailer: Mailer; notifier: Notifier; store: ProtocolStore;
   encryptionKey: Buffer; backupHash: string; realm?: string | undefined; registrationEnabled: boolean;
@@ -40,7 +34,6 @@ const passwordFailure = (error: unknown) => error instanceof PasswordRejected ? 
 export async function registerBrowserAuth(app: FastifyInstance, services: AccountServices) {
   const { pool, issuer, web, mailer, notifier, store, encryptionKey, backupHash, realm, registrationEnabled } = services;
   const guard = { preHandler: web.origin };
-  const testenvSignup = registrationEnabled && testenvSignupAllowed(issuer);
   const allowedDomain = process.env.IDENTITY_REGISTRATION_DOMAIN?.trim().toLowerCase() || undefined;
   if ((allowedDomain || process.env.IDENTITY_ACCEPTANCE_OPERATORS === 'true') &&
     process.env.IDENTITY_DEPLOYMENT_PROFILE !== 'acceptance') {
@@ -57,9 +50,9 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     return {
       initialized: Boolean(ready),
       registrationAvailable: registrationEnabled && policy !== 'closed',
-      registrationMode: testenvSignup ? 'unverified-testenv' : codes ? 'verify-email' : 'immediate',
+      registrationMode: codes ? 'verify-email' : 'immediate',
       registrationPolicy: policy, recoveryAvailable: general, passwordRule,
-      passwordlessAvailable: !testenvSignup && codes,
+      passwordlessAvailable: codes,
       registrationDomain: allowedDomain, managedAccounts: process.env.IDENTITY_ACCEPTANCE_OPERATORS === 'true',
       applications: applications.rows,
     };
@@ -87,7 +80,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
 
   async function registerAccount(request: FastifyRequest, reply: FastifyReply, uid?: string) {
     if (!registrationEnabled) return failure(reply, 503, 'registration_unavailable');
-    const passwordless = !testenvSignup && await mailer.codes();
+    const passwordless = await mailer.codes();
     const withPassword = fields(request, 'email', 'password', 'invitation') ?? fields(request, 'email', 'password');
     const withCode = passwordless ? fields(request, 'email', 'invitation') ?? fields(request, 'email') : undefined;
     let email: string;
@@ -111,7 +104,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
         const account = await registerNewAccount(db, email, hash, false, invitationDigest);
         if (account.error) return { error: account.error };
         const { id } = account;
-        await audit(db, testenvSignup ? 'account.testenv_registered' : 'account.registered', id, id);
+        await audit(db, 'account.registered', id, id);
         return { token: await web.issue(db, id, 0, request), body: { created: true, emailVerified: false, ...await continuation(db, activeIntent, id) } };
       });
       if (created.error) return failure(reply, created.error === 'email_in_use' ? 409 : 403, created.error);
@@ -533,10 +526,9 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
   const loginCodeSeconds = 900;
   const loginCodeKey = (enrollment: string, interaction?: string) =>
     web.keyFor(interaction ? enrollment + '\0' + interaction : enrollment);
-  const passwordlessAvailable = async () => !testenvSignup && await mailer.codes();
 
   function codeSignupRefusal(email: string) {
-    if (!registrationEnabled || testenvSignup) return 'registration_unavailable';
+    if (!registrationEnabled) return 'registration_unavailable';
     if (allowedDomain && email.split('@')[1] !== allowedDomain) return 'registration_domain';
   }
 
@@ -545,7 +537,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     let email: string;
     try { email = mailAddress(address ?? ''); }
     catch { return failure(reply, 400, 'invalid_email'); }
-    if (!(interaction ? await passwordlessAvailable() : await mailer.codes())) return failure(reply, 503, 'delivery_unavailable');
+    if (!await mailer.codes()) return failure(reply, 503, 'delivery_unavailable');
     if (!await loginRateAllowed(pool, request.ip, email, 'login-code', 5)) return failure(reply, 429, 'try_later');
     const enrollment = randomBytes(32).toString('base64url');
     const code = verificationCode();
@@ -778,5 +770,5 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       return result ? { enabled: result.enabled, changed: result.changed } : failure(reply, 403, 'account_not_managed');
     });
   }
-  return { requestLoginCode, verifyLoginCode, passwordlessAvailable, registerAccount, pendingEnrollment, verifyEnrollment, resendEnrollment };
+  return { requestLoginCode, verifyLoginCode, passwordlessAvailable: mailer.codes, registerAccount, pendingEnrollment, verifyEnrollment, resendEnrollment };
 }

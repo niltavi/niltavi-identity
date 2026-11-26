@@ -13,7 +13,7 @@ import { Agent } from 'undici';
 import type { Pool } from 'pg';
 import { registerAdmin } from './admin-api.js';
 import { registerApplicationApi } from './apps-api.js';
-import { registerBrowserAuth, testenvSignupAllowed } from './browser-auth.js';
+import { registerBrowserAuth } from './browser-auth.js';
 import { protocolPageCsp, registerBrowserPage } from './browser-page.js';
 import type { ProtocolOptions, ProtocolView } from './browser-page.js';
 import { assertSchema, audit, getLogin, loginRateAllowed, transaction } from './database.js';
@@ -83,10 +83,6 @@ export async function service(pool: Pool) {
   const canonical = profile === 'hosted' && gatewayIssuer && official(gatewayIssuer) && isIP(issuer.hostname) ? gatewayIssuer : undefined;
   if (profile === 'hosted' && ((!official(issuer) && !canonical) || (gatewayIssuer && !official(gatewayIssuer)))) {
     throw new Error('The hosted profile requires HTTPS issuers on niltavi.com.');
-  }
-  if (process.env.IDENTITY_TESTENV_UNVERIFIED_SIGNUP === 'true' &&
-    ![issuer, ...(gatewayIssuer ? [gatewayIssuer] : [])].some(testenvSignupAllowed)) {
-    throw new Error('Unverified signup is reserved for the Identity testenv origin.');
   }
   const gateway = gatewayIssuer ? await application(pool, gatewayIssuer, tls.options, gatewayIssuer.origin) : undefined;
   await gateway?.ready();
