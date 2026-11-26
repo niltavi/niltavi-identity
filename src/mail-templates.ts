@@ -9,9 +9,10 @@ const font = 'Arial, Helvetica, sans-serif';
 const paper = '#f5f1e6';
 const surface = '#f6f3ea';
 const surfaceBorder = '#d5d6cb';
+const fieldBorder = '#c4c6bc';
 const ink = '#283e38';
-const muted = '#56675f';
-const prominentText = `color:${ink};font-size:26px;font-weight:700;line-height:32px`;
+const muted = '#5f6f67'; // Niltava --muted with 6% --surface.
+const prominentText = `color:${ink};font-weight:700`;
 const paragraphLayout = 'max-width:360px;text-wrap:balance';
 const cardWidth = 440;
 const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;')
@@ -31,9 +32,9 @@ function render({ subject, title, introduction, code, actions = [], note }: Noti
   const text = [introduction, code, ...actions.map(({ label, url }) => `${label}: ${url}`), note,
     `Need help? Contact ${mailSupport}.`].filter(Boolean).join('\n\n');
   const codePanel = code ? `
-    <table role="presentation" align="center" cellspacing="0" cellpadding="0" border="0" style="margin:20px auto 0">
+    <table role="presentation" align="center" cellspacing="0" cellpadding="0" border="0" style="margin:16px auto 0">
       <tr><td align="center" bgcolor="${paper}"
-        style="background:${paper};border-radius:10px;padding:10px 20px;font-family:${font};${prominentText};letter-spacing:.2em">${escape(code)}</td></tr>
+        style="background:${paper};border:1px solid ${fieldBorder};border-radius:10px;padding:10px 20px;font-family:${font};font-size:26px;line-height:32px;${prominentText};letter-spacing:.2em">${escape(code)}</td></tr>
     </table>` : '';
   const actionLinks = actions.map(({ label, url }, index) => `
     <p style="margin:${index === 0 ? '20px' : '12px'} 0 0">
@@ -44,22 +45,31 @@ function render({ subject, title, introduction, code, actions = [], note }: Noti
 
   const html = `<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title></head>
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title>
+  <style>
+    @media screen and (min-width:480px) {
+      .mail-copy { font-size:13px !important; line-height:20px !important }
+      .mail-title { font-size:24px !important; line-height:30px !important }
+      .mail-help { font-size:12px !important; line-height:18px !important }
+    }
+  </style>
+</head>
 <body style="margin:0;padding:0;background:${paper}">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${paper}">
-    <tr><td align="center" style="padding:32px 16px">
+    <tr><td align="center" style="padding:24px 12px">
       <!--[if mso]><table role="presentation" width="${cardWidth}" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:${cardWidth}px;table-layout:fixed">
-        <tr><td align="center" bgcolor="${surface}"
-          style="background:${surface};border:1px solid ${surfaceBorder};border-radius:16px;padding:28px 16px;color:${muted};font-family:${font};font-size:14px;line-height:22px;overflow-wrap:break-word">
-          <p style="margin:0 0 12px">
-            <img src="${brandImage}" width="82" height="30" alt="Niltavi" style="display:inline-block;width:82px;height:30px;vertical-align:middle;border:0">
+        <tr><td class="mail-copy" align="center" bgcolor="${surface}"
+          style="background:${surface};border:1px solid ${surfaceBorder};border-radius:16px;padding:16px 16px 24px;color:${muted};font-family:${font};font-size:12px;line-height:18px;overflow-wrap:break-word">
+          <p align="right" style="margin:0 0 10px;text-align:right">
+            <img src="${brandImage}" width="74" height="27" alt="Niltavi" style="display:inline-block;width:74px;height:27px;vertical-align:middle;border:0">
           </p>
-          <h1 style="margin:0 0 8px;${prominentText}">${escape(title)}</h1>
+          <h1 class="mail-title" style="margin:0 0 8px;font-size:22px;line-height:28px;${prominentText}">${escape(title)}</h1>
           <p style="margin:0 auto;${paragraphLayout}">${escape(introduction)}</p>
           ${codePanel}${actionLinks}
-          ${note ? `<p style="margin:16px auto 0;${paragraphLayout}">${escape(note)}</p>` : ''}
-          <p style="margin:16px 0 0;font-size:12px;line-height:18px">Need help? Contact <a href="mailto:${mailSupport}" style="color:${muted};text-decoration:underline">${mailSupport}</a>.</p>
+          ${note ? `<p style="margin:12px auto 0;${paragraphLayout}">${escape(note)}</p>` : ''}
+          <p class="mail-help" style="margin:12px 0 0;font-size:11px;line-height:16px">Need help? Contact <a href="mailto:${mailSupport}" style="color:${muted};text-decoration:underline">${mailSupport}</a>.</p>
         </td></tr>
       </table>
       <!--[if mso]></td></tr></table><![endif]-->
