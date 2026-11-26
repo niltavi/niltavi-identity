@@ -354,5 +354,5 @@
 
   const api = Object.freeze({ width, height, defaults, createPosterLayout, drawPoster });
   if (typeof module === 'object' && module.exports) module.exports = api;
-  else globalThis.NiltaviBanner = api;
+  globalThis.NiltaviBanner = api;
 })();
