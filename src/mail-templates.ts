@@ -42,7 +42,7 @@ function render({ subject, title, introduction, code, actions = [], expiresIn, n
     `Need help? Contact ${mailSupport}.`].filter(Boolean).join('\n\n');
   // Indent slightly to counterbalance the tracking after the last digit.
   const codePanel = code ? `
-    <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+    <table role="presentation" align="center" cellspacing="0" cellpadding="0" border="0" style="margin:0 auto">
       <tr><td align="center" valign="middle" bgcolor="${codeSurface}"
         style="background:${codeSurface};border:1px solid ${codeBorder};border-radius:10px;padding:12px 20px;color:${codeForeground};font-family:${font};font-size:28px;font-weight:600;line-height:36px;text-align:center;vertical-align:middle;font-variant-numeric:tabular-nums;letter-spacing:.16em;text-indent:.2em">${escape(code)}</td></tr>
     </table>` : '';
