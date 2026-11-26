@@ -1,6 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000" viewBox="0 0 1000 1000">
   <title>Identity</title>
-  <style>@media (prefers-color-scheme: dark) { svg > circle, svg > g, svg > path { fill: #fff; } }</style>
+  <style>
+    /* Niltava foreground colors for use as a standalone favicon. */
+    svg { color: #283e38; }
+    @media (prefers-color-scheme: dark) { svg { color: #f5f1e6; } }
+  </style>
   <defs>
     <mask id="overlap" maskUnits="userSpaceOnUse" x="0" y="0" width="1000" height="1000">
       <rect width="1000" height="1000" fill="#fff" />
@@ -10,8 +14,8 @@
         L346.1 700 A12 12 0 0 1 334.82 683.92Z" />
     </mask>
   </defs>
-  <circle cx="561" cy="238" r="144" />
-  <g fill="#000" mask="url(#overlap)">
+  <circle cx="561" cy="238" r="144" fill="currentColor" />
+  <g fill="currentColor" mask="url(#overlap)">
     <path d="M414.89 437.37 A26 26 0 0 1 439.41 420
       L825.29 420 A26 26 0 0 1 849.81 454.63
       L767.11 689.63 A26 26 0 0 1 742.59 707

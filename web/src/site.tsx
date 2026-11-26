@@ -106,7 +106,8 @@ export function BrandHeader({ route, navigate, publicPage = false, onLanguage }:
     else window.location.assign(href);
   }
   const header = <ProductHeader
-    brand={{ name: 'Identity', href: pathFor(brandRoute), symbol: <img src="/identity-assets/identity-logo-icon.svg" width={40} height={40} alt="" />,
+    brand={{ name: 'Identity', href: pathFor(brandRoute), symbol: <span className="size-full bg-current forced-color-adjust-none"
+      style={{ mask: 'url(/identity-assets/identity-logo-icon.svg) center / contain no-repeat' }} />,
       onClick: event => followRoute(event, brandRoute, navigate) }}
     labels={labels} theme={theme} onToggleTheme={toggle} githubHref={repository} locale={language} locales={locales}
     variant={publicPage ? 'site' : 'app'}
@@ -122,7 +123,7 @@ export function BrandFooter() {
 
 export function Website({ language, navigate }: { language: Language; navigate: Navigate }) {
   const labels = copy[language];
-  return <main className={`${container} flex flex-1 items-center py-16 sm:py-24`}>
+  return <main className={`${container} grid flex-1 content-center gap-8 py-12 sm:py-16 md:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] md:items-center lg:gap-16`}>
     <div className="grid max-w-2xl gap-6">
       <h1 className="text-balance text-4xl font-medium tracking-tight sm:text-5xl lg:text-6xl">
         {language === 'en' ? labels.heading : <><span className="whitespace-nowrap">一个账号，</span><wbr /><span className="whitespace-nowrap">登录多个应用</span></>}
@@ -134,5 +135,7 @@ export function Website({ language, navigate }: { language: Language; navigate: 
           className={buttonVariants({ variant: 'secondary' })}>{labels.register}</RouteLink>
       </div>
     </div>
+    <img className="order-first w-36 justify-self-center sm:w-44 md:order-none md:w-full md:max-w-xs"
+      src="/identity-assets/identity-logo-textured.png" width={1000} height={1000} alt="" />
   </main>;
 }
