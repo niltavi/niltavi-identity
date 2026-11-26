@@ -4,16 +4,17 @@ export const mailSupport = 'support@niltavi.com';
 export const verificationSubject = 'Your Niltavi Identity verification code';
 
 const brandImage = 'https://identity.niltavi.com/identity-assets/niltavi-logo-light.png';
-const font = 'Arial, Helvetica, sans-serif';
-// Niltava light theme colors resolved to sRGB for email clients.
-const paper = '#f5f1e6';
-const surface = '#f6f3ea';
-const surfaceBorder = '#d5d6cb';
-const fieldBorder = '#c4c6bc';
-const ink = '#283e38';
-const muted = '#5f6f67'; // Niltava --muted with 6% --surface.
-const prominentText = `color:${ink};font-weight:700`;
-const paragraphLayout = 'max-width:360px;text-wrap:balance';
+const font = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif";
+// Resolve Niltava's light theme to sRGB for email clients without CSS variables.
+const paper = '#f5f1e6'; // niltavi-ignore color-literal
+const surface = '#f6f3ea'; // niltavi-ignore color-literal
+const surfaceBorder = '#d5d6cb'; // niltavi-ignore color-literal
+const fieldBorder = '#c4c6bc'; // niltavi-ignore color-literal
+const separator = '#e3e1d7'; // niltavi-ignore color-literal
+const ink = '#283e38'; // niltavi-ignore color-literal
+const muted = '#5f6f67'; // niltavi-ignore color-literal (Niltava --muted with 6% --surface.)
+const white = '#fff'; // niltavi-ignore color-literal
+const prominentText = `color:${ink};font-weight:600`;
 const cardWidth = 440;
 const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;')
   .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
@@ -32,14 +33,14 @@ function render({ subject, title, introduction, code, actions = [], note }: Noti
   const text = [introduction, code, ...actions.map(({ label, url }) => `${label}: ${url}`), note,
     `Need help? Contact ${mailSupport}.`].filter(Boolean).join('\n\n');
   const codePanel = code ? `
-    <table role="presentation" align="center" cellspacing="0" cellpadding="0" border="0" style="margin:16px auto 0">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0">
       <tr><td align="center" bgcolor="${paper}"
-        style="background:${paper};border:1px solid ${fieldBorder};border-radius:10px;padding:10px 20px;font-family:${font};font-size:26px;line-height:32px;${prominentText};letter-spacing:.2em">${escape(code)}</td></tr>
+        style="background:${paper};border:1px solid ${fieldBorder};border-radius:10px;padding:12px 20px;font-family:${font};font-size:28px;line-height:36px;${prominentText};font-variant-numeric:tabular-nums;letter-spacing:.16em">${escape(code)}</td></tr>
     </table>` : '';
   const actionLinks = actions.map(({ label, url }, index) => `
-    <p style="margin:${index === 0 ? '20px' : '12px'} 0 0">
+    <p style="margin:${index === 0 ? '0' : '12px 0 0'}">
       <a href="${escape(url)}" style="${index === 0
-        ? `display:inline-block;border-radius:8px;background:${ink};color:#fff;padding:10px 18px;font-weight:700;text-decoration:none`
+        ? `display:inline-block;border-radius:8px;background:${ink};color:${white};padding:12px 16px;font-weight:600;text-decoration:none`
         : `color:${muted};text-decoration:underline`}">${escape(label)}</a>
     </p>`).join('');
 
@@ -49,9 +50,8 @@ function render({ subject, title, introduction, code, actions = [], note }: Noti
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title>
   <style>
     @media screen and (min-width:480px) {
-      .mail-copy { font-size:13px !important; line-height:20px !important }
+      .mail-copy { padding:24px 28px !important; font-size:14px !important; line-height:22px !important }
       .mail-title { font-size:24px !important; line-height:30px !important }
-      .mail-help { font-size:12px !important; line-height:18px !important }
     }
   </style>
 </head>
@@ -60,16 +60,16 @@ function render({ subject, title, introduction, code, actions = [], note }: Noti
     <tr><td align="center" style="padding:24px 12px">
       <!--[if mso]><table role="presentation" width="${cardWidth}" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:${cardWidth}px;table-layout:fixed">
-        <tr><td class="mail-copy" align="center" bgcolor="${surface}"
-          style="background:${surface};border:1px solid ${surfaceBorder};border-radius:16px;padding:16px 16px 24px;color:${muted};font-family:${font};font-size:12px;line-height:18px;overflow-wrap:break-word">
-          <p align="right" style="margin:0 0 10px;text-align:right">
-            <img src="${brandImage}" width="74" height="27" alt="Niltavi" style="display:inline-block;width:74px;height:27px;vertical-align:middle;border:0">
+        <tr><td class="mail-copy" align="left" bgcolor="${surface}"
+          style="background:${surface};border:1px solid ${surfaceBorder};border-radius:16px;padding:20px;color:${muted};font-family:${font};font-size:13px;line-height:20px;text-align:left;overflow-wrap:break-word">
+          <p align="right" style="margin:0 0 12px;line-height:24px;text-align:right">
+            <img src="${brandImage}" width="66" height="24" alt="Niltavi" style="display:inline-block;width:66px;height:24px;vertical-align:top;border:0">
           </p>
-          <h1 class="mail-title" style="margin:0 0 8px;font-size:22px;line-height:28px;${prominentText}">${escape(title)}</h1>
-          <p style="margin:0 auto;${paragraphLayout}">${escape(introduction)}</p>
+          <h1 class="mail-title" style="margin:0 0 4px;font-size:22px;line-height:28px;${prominentText}">${escape(title)}</h1>
+          <p style="margin:0 0 20px">${escape(introduction)}</p>
           ${codePanel}${actionLinks}
-          ${note ? `<p style="margin:12px auto 0;${paragraphLayout}">${escape(note)}</p>` : ''}
-          <p class="mail-help" style="margin:12px 0 0;font-size:11px;line-height:16px">Need help? Contact <a href="mailto:${mailSupport}" style="color:${muted};text-decoration:underline">${mailSupport}</a>.</p>
+          ${note ? `<p style="margin:16px 0 0">${escape(note)}</p>` : ''}
+          <p style="margin:20px 0 0;padding:12px 0 0;border-top:1px solid ${separator};font-size:12px;line-height:18px">Need help? Contact <a href="mailto:${mailSupport}" style="color:${muted};text-decoration:underline">${mailSupport}</a>.</p>
         </td></tr>
       </table>
       <!--[if mso]></td></tr></table><![endif]-->
@@ -84,9 +84,9 @@ export const messages = {
   code: (code: string) => render({
     subject: verificationSubject,
     title: 'Your verification code',
-    introduction: 'Enter this code to continue with Niltavi Identity.',
+    introduction: 'Enter this code in Niltavi Identity.',
     code,
-    note: "The code expires in 15 minutes. If you didn't request it, you can ignore this email.",
+    note: "This code expires in 15 minutes. If you didn't request it, ignore this email.",
   }),
   existing: (origin: string, language: 'en' | 'zh') => {
     const prefix = origin + (language === 'zh' ? '/zh' : '');
