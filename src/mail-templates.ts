@@ -5,6 +5,12 @@ export const verificationSubject = 'Your Niltavi Identity verification code';
 
 const brandImage = 'https://identity.niltavi.com/identity-assets/niltavi-logo-light.png';
 const font = 'Arial, Helvetica, sans-serif';
+const paper = '#f5f1e6';
+const ink = '#283e38';
+const muted = '#6a7181';
+const prominentText = `color:${ink};font-size:26px;font-weight:700;line-height:32px`;
+const paragraphLayout = 'max-width:360px;text-wrap:balance';
+const cardWidth = 440;
 const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;')
   .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 
@@ -13,47 +19,44 @@ type Notice = {
   subject: string;
   title: string;
   introduction: string;
-  mutedIntroduction?: boolean;
   code?: string;
   actions?: Action[];
   note?: string;
 };
 
-function render({ subject, title, introduction, mutedIntroduction, code, actions = [], note }: Notice): Message {
+function render({ subject, title, introduction, code, actions = [], note }: Notice): Message {
   const text = [introduction, code, ...actions.map(({ label, url }) => `${label}: ${url}`), note,
     `Need help? Contact ${mailSupport}.`].filter(Boolean).join('\n\n');
   const codePanel = code ? `
-    <table role="presentation" align="center" cellspacing="0" cellpadding="0" border="0" style="margin:26px auto 24px">
-      <tr><td bgcolor="#f1f2f4" style="background:#f1f2f4;border-radius:12px;padding:14px 24px;text-align:center">
-        <span style="font-family:${font};font-size:32px;font-weight:700;line-height:1.2;letter-spacing:.2em;color:#1b1d22">${escape(code)}</span>
-      </td></tr>
+    <table role="presentation" align="center" cellspacing="0" cellpadding="0" border="0" style="margin:20px auto 0">
+      <tr><td align="center" bgcolor="${paper}"
+        style="background:${paper};border-radius:10px;padding:10px 20px;font-family:${font};${prominentText};letter-spacing:.2em">${escape(code)}</td></tr>
     </table>` : '';
   const actionLinks = actions.map(({ label, url }, index) => `
-    <p style="margin:${index === 0 ? '24px' : '12px'} 0 0">
+    <p style="margin:${index === 0 ? '20px' : '12px'} 0 0">
       <a href="${escape(url)}" style="${index === 0
-        ? 'display:inline-block;border-radius:8px;background:#24262d;color:#fff;padding:10px 18px;font-weight:600;text-decoration:none'
-        : 'color:#2457a6;text-decoration:underline'}">${escape(label)}</a>
+        ? `display:inline-block;border-radius:8px;background:${ink};color:#fff;padding:10px 18px;font-weight:700;text-decoration:none`
+        : `color:${muted};text-decoration:underline`}">${escape(label)}</a>
     </p>`).join('');
 
   const html = `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title></head>
-<body style="margin:0;padding:0;background:#f3f4f5;color:#1b1d22;font-family:${font};font-size:16px;line-height:1.55">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="#f3f4f5">
+<body style="margin:0;padding:0;background:${paper}">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" bgcolor="${paper}">
     <tr><td align="center" style="padding:32px 16px">
-      <!--[if mso]><table role="presentation" width="520" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
-      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:520px">
-        <tr><td bgcolor="#ffffff" style="background:#ffffff;border-radius:18px;padding:32px 24px">
-          <div style="text-align:center">
-            <p align="center" style="margin:0 0 16px">
-              <img src="${brandImage}" width="82" height="30" alt="Niltavi" style="display:inline-block;width:82px;height:30px;vertical-align:middle;border:0">
-            </p>
-            <h1 style="font-size:25px;line-height:1.25;margin:0 0 12px;font-weight:700;color:#1b1d22">${escape(title)}</h1>
-            <p style="margin:0${mutedIntroduction ? ';color:#616976' : ''}">${escape(introduction)}</p>
-            ${codePanel}${actionLinks}
-            ${note ? `<p style="margin:22px 0 0;font-size:14px;color:#616976">${escape(note)}</p>` : ''}
-          </div>
-          <p style="margin:24px 0 0;font-size:12px;color:#6b7280">Need help? Contact <a href="mailto:${mailSupport}" style="color:#6b7280;text-decoration:underline">${mailSupport}</a>.</p>
+      <!--[if mso]><table role="presentation" width="${cardWidth}" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:${cardWidth}px;table-layout:fixed">
+        <tr><td align="center" bgcolor="#ffffff"
+          style="background:#ffffff;border-radius:16px;padding:28px 16px;color:${muted};font-family:${font};font-size:14px;line-height:22px;overflow-wrap:break-word">
+          <p style="margin:0 0 12px">
+            <img src="${brandImage}" width="82" height="30" alt="Niltavi" style="display:inline-block;width:82px;height:30px;vertical-align:middle;border:0">
+          </p>
+          <h1 style="margin:0 0 8px;${prominentText}">${escape(title)}</h1>
+          <p style="margin:0 auto;${paragraphLayout}">${escape(introduction)}</p>
+          ${codePanel}${actionLinks}
+          ${note ? `<p style="margin:16px auto 0;${paragraphLayout}">${escape(note)}</p>` : ''}
+          <p style="margin:16px 0 0;font-size:12px;line-height:18px">Need help? Contact <a href="mailto:${mailSupport}" style="color:${muted};text-decoration:underline">${mailSupport}</a>.</p>
         </td></tr>
       </table>
       <!--[if mso]></td></tr></table><![endif]-->
@@ -69,7 +72,6 @@ export const messages = {
     subject: verificationSubject,
     title: 'Your verification code',
     introduction: 'Enter this code to continue with Niltavi Identity.',
-    mutedIntroduction: true,
     code,
     note: "The code expires in 15 minutes. If you didn't request it, you can ignore this email.",
   }),
