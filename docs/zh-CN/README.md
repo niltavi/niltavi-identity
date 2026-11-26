@@ -20,11 +20,11 @@ Identity 通过 OpenID Connect 为应用提供登录服务。你可以把它用�
 
 <br />
 
-![账号列表显示管理员角色、邮箱验证状态、停用状态和账号管理菜单](../screenshots/instance-accounts.png)
+![账号列表显示管理员角色、邮箱验证状态、停用状态和账号管理菜单](../screenshots/instance-accounts-1080.png)
 
-![OpenID Connect 应用列表显示启用、停用和客户端密钥操作，下方为应用注册表单](../screenshots/instance-applications.png)
+![OpenID Connect 应用列表显示启用、停用和客户端密钥操作，下方为应用注册表单](../screenshots/instance-applications-1080.png)
 
-![账号中心的团队页面显示 Fieldwork Studio 的成员角色和待接受的邀请](../screenshots/workspace-teams.png)
+![账号中心的团队页面显示 Fieldwork Studio 的成员角色和待接受的邀请](../screenshots/workspace-teams-1080.png)
 
 <br />
 

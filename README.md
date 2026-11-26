@@ -20,11 +20,11 @@ Run Identity on your own machine with Docker Compose. The admin console lets you
 
 <br />
 
-![Account list showing administrator roles, verification and disabled states, and the account management menu](docs/screenshots/instance-accounts.png)
+![Account list showing administrator roles, verification and disabled states, and the account management menu](docs/screenshots/instance-accounts-1080.png)
 
-![OpenID Connect application list with enable, disable, and client secret controls above the registration form](docs/screenshots/instance-applications.png)
+![OpenID Connect application list with enable, disable, and client secret controls above the registration form](docs/screenshots/instance-applications-1080.png)
 
-![Teams page in the account center showing the Fieldwork Studio team, member roles, and a pending invitation](docs/screenshots/workspace-teams.png)
+![Teams page in the account center showing the Fieldwork Studio team, member roles, and a pending invitation](docs/screenshots/workspace-teams-1080.png)
 
 <br />
 
