@@ -138,6 +138,11 @@ try {
   };
   const code = await delivered(1);
   assert.ok(code);
+  assert.match(messages[0], /Reply-To: support@niltavi\.com/i);
+  assert.match(messages[0], /Content-Type: multipart\/alternative/i);
+  assert.match(messages[0], /Content-Type: text\/plain/i);
+  assert.match(messages[0], /Content-Type: text\/html/i);
+  assert.match(messages[0], /Your verification code/);
   assert.equal((await http('/account/verify', { cookie: enrollmentCookie, body: { email, code: 'X'.repeat(32) } })).status, 400);
   assert.equal((await http('/account/verify', { body: { email, code } })).status, 400);
   assert.equal((await http('/account/verify', { cookie: enrollmentCookie, host: vanityHost, origin: gateway, body: { email, code } })).status, 400);

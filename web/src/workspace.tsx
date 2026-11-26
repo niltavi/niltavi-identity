@@ -91,17 +91,17 @@ function Preferences() {
   const management: Route = { language, section: 'workspace', tab: 'settings', accountManagement: true };
   return <>
     <Panel title={t('Preferences', '偏好设置')}
-      description={t('Choose the language for email verification and password reset messages.', '选择邮箱验证和密码重置邮件的语言。')}>
+      description={t('Choose the language for verification and password reset pages opened from an email.', '选择从邮件打开的验证和密码重置页面的语言。')}>
       <TaskFeedback task={task} />
       <Form className="grid max-w-md gap-4" onSubmit={event => {
         event.preventDefault();
         void task.run('save', async () => {
           await call('/account/preferences', { locale: locale === 'browser' ? '' : locale });
           await refresh();
-          return t('Email language saved.', '邮件语言已保存。');
+          return t('Link language saved.', '邮件链接语言已保存。');
         });
       }}>
-        <Choice label={t('Email language', '邮件语言')} value={locale} onChange={setLocale} options={[
+        <Choice label={t('Email link language', '邮件链接语言')} value={locale} onChange={setLocale} options={[
           { id: 'browser', label: t('Same as this browser', '跟随浏览器') }, { id: 'en', label: 'English' }, { id: 'zh-CN', label: '简体中文' }]} />
         <div><Button type="submit" isPending={task.pending === 'save'}>{t('Save', '保存')}</Button></div>
       </Form>

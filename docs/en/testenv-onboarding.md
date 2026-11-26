@@ -29,4 +29,13 @@ In verified mode, registration returns `202`, then email and code confirmation i
 
 Use `compose.public-testenv.yaml` only for the existing public testenv stack, alongside its gateway origin and TLS overlays. Use the same PostgreSQL volume and signing key files. Apply the additive migrations before restarting only the Identity service. Keep the prior runtime, environment and overlay stack for rollback. Do not run the acceptance mail overlay in the public stack. A direct request to the legacy IP homepage or registration path directs the browser to the canonical test hostname. The primary IP still supports its health probe and existing sessions.
 
-Production sender setup resumes separately. Mount `IDENTITY_TENCENT_SES_CONFIG_FILE` as a private file readable by Identity. The JSON fields are `secretId`, `secretKey`, optional `token`, `region`, `fromEmail`, numeric `templateId`, optional numeric `templateIdZh`, and `codeVariable` (defaults to `code`). Use an approved template and authenticated sender in `ap-guangzhou` or `ap-hongkong`. Identity uses Tencent's Node SDK to send an individual triggered verification message over HTTPS. Verify receipt in authorized personal and business inboxes before turning on verified public signup. [SendEmail contract](https://cloud.tencent.com/document/api/1288/51034)
+Mount `IDENTITY_TENCENT_SES_CONFIG_FILE` as a private file readable by Identity. The JSON fields are `secretId`, `secretKey`, optional `token`, `region`, `fromEmail`, numeric `templateId`, and `codeVariable` (defaults to `code`). Identity uses one English template and an authenticated sender in `ap-guangzhou` or `ap-hongkong`. It sends an individual triggered verification message over HTTPS. [SendEmail contract](https://cloud.tencent.com/document/api/1288/51034)
+
+Generate the `CreateEmailTemplate` request with both formats from the same source as the SMTP message:
+
+```sh
+npm run build:service
+node scripts/ses-code-template.mjs > ses-code-template.json
+```
+
+Pass the configured `codeVariable` as the script's first argument if it differs from `code`. Submit the request in the selected SES region, wait for approval, then switch `templateId` to the approved template. Verify placement in authorized personal and business inboxes using the production sender. Confirm that the sending domain's SPF and DKIM setup aligns with DMARC. [CreateEmailTemplate contract](https://cloud.tencent.com/document/api/1288/51042) · [Gmail sender guidelines](https://support.google.com/mail/answer/81126)

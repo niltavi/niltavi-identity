@@ -10,7 +10,7 @@ import type { Notifier } from './notify.js';
 import { registrationPolicy } from './registration.js';
 import { beginMailTest, confirmMailTest, mailFields } from './setup.js';
 import { leaveAllTeams } from './teams.js';
-import { failure, fields, requestLanguage } from './web-session.js';
+import { failure, fields } from './web-session.js';
 import type { Viewer, WebSessions } from './web-session.js';
 
 // The instance console. Any instance administrator can read it. Changing anything also
@@ -226,7 +226,7 @@ export function registerAdmin(app: FastifyInstance, pool: Pool, issuer: URL, web
     if (!viewer) return reply;
     const values = fields(request, ...mailFields);
     if (!values) return failure(reply, 400, 'invalid_mail_settings');
-    try { await beginMailTest(pool, mailer, values, viewer.id, mailTarget(viewer), requestLanguage(request)); }
+    try { await beginMailTest(pool, mailer, values, viewer.id, mailTarget(viewer)); }
     catch (error) { return rejected(reply, error); }
     return reply.code(202).send({ sentTo: mailTarget(viewer) });
   });

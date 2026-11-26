@@ -47,7 +47,6 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     throw new Error('Registration domain restrictions and acceptance operators require the acceptance profile.');
   }
   if (allowedDomain) mailAddress(`mail@${allowedDomain}`);
-  const mailLanguage = requestLanguage;
   const enrollmentCookieFor = (uid?: string) => uid ? `${enrollmentCookie}-${uid}` : enrollmentCookie;
   const enrollmentKey = (token: string, uid?: string) => web.keyFor(uid ? token + '\0' + uid : token);
   app.get('/account/config', async () => {
@@ -128,11 +127,10 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
         (SELECT token_digest FROM registration_intents WHERE token_digest = $7 AND expires_at > now() AND account_id IS NULL), $8)`,
     [codeKey(enrollment, code), email, enrollmentSeconds, enrollmentKey(enrollment, uid), hash, resendSeconds,
       activeIntent ?? null, invitationDigest]);
-    const language = mailLanguage(request);
     mailer.later(async () => {
       if (await getLogin(pool, email)) {
-        if (await mailer.general()) await mailer.send(email, messages.existing(issuer.origin, language));
-      } else await mailer.sendCode(email, code, language);
+        if (await mailer.general()) await mailer.send(email, messages.existing(issuer.origin, requestLanguage(request)));
+      } else await mailer.sendCode(email, code);
     });
     setBrowserCookie(reply, enrollmentCookieFor(uid), enrollment, enrollmentSeconds);
     return reply.code(202).send({ accepted: true });
@@ -167,8 +165,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
         WHERE enrollment_digest = $3 AND expires_at > now() AND next_resend_at <= now()`,
       [codeKey(enrollment, code), enrollmentSeconds, key, resendSeconds]);
     if (!changed.rowCount) return failure(reply.header('retry-after', String(resendSeconds)), 429, 'resend_wait');
-    const language = mailLanguage(request);
-    mailer.later(async () => { if (!await getLogin(pool, email)) await mailer.sendCode(email, code, language); });
+    mailer.later(async () => { if (!await getLogin(pool, email)) await mailer.sendCode(email, code); });
     setBrowserCookie(reply, enrollmentCookieFor(uid), enrollment, enrollmentSeconds);
     return reply.code(202).send({ accepted: true });
   }
@@ -377,13 +374,13 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       const account = (await pool.query<{ id: string; locale: 'en' | 'zh-CN' | null }>(
         'SELECT id, locale FROM accounts WHERE email = $1 AND enabled AND email_verified_at IS NOT NULL', [email])).rows[0];
       if (!account) return;
-      const language = mailLanguage(request, account.locale);
+      const language = requestLanguage(request, account.locale);
       const link = issuer.origin + (language === 'zh' ? '/zh' : '') + '/reset#';
       const token = await transaction(pool, async (db) => {
         await audit(db, 'account.recovery_requested', account.id, account.id);
         return issueAccountLink(db, account.id, email, 'reset');
       });
-      await mailer.send(email, messages.reset(link + token, language));
+      await mailer.send(email, messages.reset(link + token));
     });
     return reply.code(202).send({ accepted: true });
   });
@@ -433,9 +430,9 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       return failure(reply, 429, 'try_later');
     }
     const token = await issueAccountLink(pool, viewer.id, viewer.email, 'verify');
-    const language = mailLanguage(request, viewer.locale);
+    const language = requestLanguage(request, viewer.locale);
     const link = issuer.origin + (language === 'zh' ? '/zh' : '') + '/verify-email#' + token;
-    mailer.later(() => mailer.send(viewer.email, messages.verify(link, language)));
+    mailer.later(() => mailer.send(viewer.email, messages.verify(link)));
     return reply.code(202).send({ accepted: true });
   });
 
@@ -477,8 +474,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       ON CONFLICT (account_id) DO UPDATE SET token_digest = EXCLUDED.token_digest, email = EXCLUDED.email,
         attempts = 0, expires_at = EXCLUDED.expires_at, next_resend_at = EXCLUDED.next_resend_at`,
     [viewer.id, codeKey(enrollment, code), viewer.email, verifyCodeSeconds, resendSeconds]);
-    const language = mailLanguage(request, viewer.locale);
-    mailer.later(() => mailer.sendCode(viewer.email, code, language));
+    mailer.later(() => mailer.sendCode(viewer.email, code));
     setBrowserCookie(reply, verifyCodeCookie, enrollment, verifyCodeSeconds);
     return reply.code(202).send({ accepted: true, email: viewer.email });
   });
@@ -500,8 +496,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
         WHERE account_id = $4 AND expires_at > now() AND next_resend_at <= now()`,
       [codeKey(enrollment, code), verifyCodeSeconds, resendSeconds, viewer.id]);
     if (!changed.rowCount) return failure(reply.header('retry-after', String(resendSeconds)), 429, 'resend_wait');
-    const language = mailLanguage(request, viewer.locale);
-    mailer.later(() => mailer.sendCode(viewer.email, code, language));
+    mailer.later(() => mailer.sendCode(viewer.email, code));
     setBrowserCookie(reply, verifyCodeCookie, enrollment, verifyCodeSeconds);
     return reply.code(202).send({ accepted: true });
   });
@@ -559,11 +554,10 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       VALUES ($1, $2, $3, now() + $4 * interval '1 second', now() + $5 * interval '1 second')
       ON CONFLICT (enrollment_digest) DO NOTHING`,
     [codeKey(enrollment, code), email, loginCodeKey(enrollment, interaction), loginCodeSeconds, resendSeconds]);
-    const language = mailLanguage(request);
     mailer.later(async () => {
       const account = await getLogin(pool, email);
       if (account ? account.enabled : !codeSignupRefusal(email) && !await registrationRefusal(pool, email, invitationKey(invitation))) {
-        await mailer.sendCode(email, code, language);
+        await mailer.sendCode(email, code);
       }
     });
     setBrowserCookie(reply, loginCodeCookie, enrollment, loginCodeSeconds);

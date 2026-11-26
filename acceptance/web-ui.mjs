@@ -588,14 +588,14 @@ await journey('register without mail (Chinese): signed in at once, address unver
   await page.getByText('未验证').waitFor();
   await page.getByText('此实例无法发信，请联系管理员为你验证邮箱。').waitFor();
   await page.screenshot({ path: join(shots, 'workspace-zh.png'), fullPage: true });
-  assert.equal(await page.getByRole('button', { name: '邮件语言' }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: '邮件链接语言' }).count(), 0);
   await page.getByRole('link', { name: '设置' }).click();
   await page.waitForURL(origin + '/zh/workspace/settings');
-  const locale = page.getByRole('button', { name: /邮件语言/ });
+  const locale = page.getByRole('button', { name: /邮件链接语言/ });
   assert.match(await locale.innerText(), /跟随浏览器/);
-  await choose(page, /邮件语言/, 'English');
+  await choose(page, /邮件链接语言/, 'English');
   await page.getByRole('button', { name: '保存' }).click();
-  await page.getByText('邮件语言已保存。').waitFor();
+  await page.getByText('邮件链接语言已保存。').waitFor();
   await page.reload();
   await locale.waitFor();
   assert.match(await locale.innerText(), /English/);

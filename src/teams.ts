@@ -171,7 +171,7 @@ export function registerTeams(app: FastifyInstance, pool: Pool, issuer: URL, web
     const language = requestLanguage(request);
     const link = `${issuer.origin}${language === 'zh' ? '/zh' : ''}/invite#${token}`;
     const delivered = await mailer.general();
-    if (delivered) mailer.later(() => mailer.send(email, messages.invitation(link, team.name, viewer.name ?? viewer.email, language)));
+    if (delivered) mailer.later(() => mailer.send(email, messages.invitation(link, team.name, viewer.name ?? viewer.email)));
     // The inviter sees the link once, so an instance without outgoing mail can still pass it on.
     return reply.code(201).send({ id, email, role, link, delivered });
   });
