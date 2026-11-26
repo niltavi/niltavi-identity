@@ -241,7 +241,9 @@ export function AuthLayout({ children, brand, controls }: { children: ReactNode;
       <footer className="nt-authlayout__footer">
         <img className="niltavi-product-footer__light" src="/identity-assets/niltavi-logo-light.svg" alt="Niltavi" width={48} height={18} />
         <img className="niltavi-product-footer__dark" src="/identity-assets/niltavi-logo-dark.svg" alt="Niltavi" width={48} height={18} />
-        <ShieldCheck role="img" aria-label="Identity" width={16} height={16} />
+        <a className="nt-authlayout__identity" href="https://identity.niltavi.com/" aria-label="Identity">
+          <ShieldCheck aria-hidden="true" width={16} height={16} />
+        </a>
       </footer>
     </div>
   </div>;
