@@ -6,7 +6,7 @@
 
 *User authentication infrastructure for the AI era. Run it as your authentication server, add it as a sign-in option, or deploy it locally.*
 
-[Try the test deployment](https://identity.testenv.niltavi.com/) · [Integration guide](docs/en/integration.md) · [简体中文](docs/zh-CN/README.md)
+[Website](https://identity.niltavi.com/) · [Integration guide](docs/en/integration.md) · [简体中文](docs/zh-CN/README.md)
 
 </div>
 

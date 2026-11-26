@@ -6,7 +6,7 @@
 
 *AI 时代的用户身份认证基础设施。服务端、登录方式、本地部署，一站式支持*
 
-[试用测试环境](https://identity.testenv.niltavi.com/zh/) · [接入指南（英文）](../en/integration.md) · [English](../../README.md)
+[官网](https://identity.niltavi.com/zh/) · [接入指南（英文）](../en/integration.md) · [English](../../README.md)
 
 </div>
 
