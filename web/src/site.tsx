@@ -13,6 +13,9 @@ export type { Language } from '../../src/browser-routes';
 export type Route = { language: Language; section: Section; tab?: string | undefined; team?: string | undefined; accountManagement?: boolean };
 export type Navigate = (route: Route, replace?: boolean) => void;
 
+const chineseDescriptionLead = 'AI 时代的用户身份认证基础设施。';
+const chineseDescriptionDetail = '作为服务端？作为登录方式？自己本地部署？一站式配齐。';
+
 export const copy = {
   en: {
     title: 'Niltavi Identity',
@@ -25,7 +28,7 @@ export const copy = {
   'zh-CN': {
     title: 'Niltavi Identity · 统一登录',
     heading: '一个身份随处可用',
-    description: 'AI 时代的用户身份认证基础设施。当成服务端？当成登录方式？自己本地部署？全都支持。',
+    description: chineseDescriptionLead + chineseDescriptionDetail,
     signIn: '登录', register: '创建账号',
     navigation: '官网导航', home: '首页', 'self-host': '本地部署',
     dark: '切换到深色主题', light: '切换到浅色主题', language: '语言', github: 'GitHub 仓库',
@@ -137,7 +140,9 @@ export function Website({ language, navigate }: { language: Language; navigate: 
   return <main className={`${container} grid flex-1 content-center gap-8 py-12 sm:py-16 md:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] md:items-center lg:gap-16`}>
     <div className="grid max-w-2xl gap-6">
       <h1 className="text-balance text-4xl font-medium tracking-tight sm:text-5xl lg:text-6xl">{labels.heading}</h1>
-      <p className="max-w-lg text-pretty text-lg/relaxed text-muted">{labels.description}</p>
+      <p className="max-w-lg text-pretty text-lg/relaxed text-muted">
+        {language === 'zh-CN' ? <>{chineseDescriptionLead}<br />{chineseDescriptionDetail}</> : labels.description}
+      </p>
       <div className="flex flex-wrap items-center gap-3">
         <RouteLink route={{ language, section: 'register' }} navigate={navigate}
           className={buttonVariants({ variant: 'primary' })}>{labels.register}</RouteLink>
