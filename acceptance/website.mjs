@@ -139,7 +139,16 @@ try {
   }
 
   const mobile = page.getByRole('main');
-  await expect(mobile.getByRole('link', { name: '创建账号' })).toHaveClass(/button--primary/);
+  const registerLink = mobile.getByRole('link', { name: '创建账号' });
+  await expect(registerLink).toHaveClass(/button--primary/);
+  await registerLink.click();
+  await page.waitForURL(origin + '/zh/register');
+  await expect(mobile).toHaveClass('nt-authlayout__content');
+  await expect(mobile.getByRole('heading', { name: '创建账号' })).toBeVisible();
+  await expect(mobile.getByLabel('邮箱', { exact: true })).toBeVisible();
+  assert.equal(await page.evaluate(() => window.__identityDoc), 'retained');
+  await page.goBack();
+  await page.waitForURL(origin + '/zh/');
   await mobile.getByRole('link', { name: '本地部署' }).click();
   await page.waitForURL(origin + '/zh/self-host');
   await expect(nav.getByRole('link', { name: '本地部署' })).toHaveAttribute('aria-current', 'page');
@@ -168,13 +177,12 @@ try {
     await configGate;
     await intercepted.continue();
   });
-  const headerHandle = await header.elementHandle();
   await header.getByRole('link', { name: '登录' }).click();
   try {
     await Promise.race([configHeld, new Promise((_, reject) => setTimeout(() => reject(new Error('Session request was not held')), 8000).unref())]);
     await page.waitForURL(origin + '/zh/login');
     await expect(page.getByRole('main').locator('[aria-busy="true"]')).toBeVisible();
-    assert.equal(await headerHandle.evaluate(n => n.isConnected), true);
+    await expect(header.getByRole('button', { name: '语言' })).toBeVisible();
     assert.equal(await page.evaluate(() => window.__identityDoc), 'retained');
     assert.equal(await colorCheck('dark'), dark);
   } finally { releaseConfig(); }
@@ -184,9 +192,14 @@ try {
   await page.getByRole('menu').getByText('English', { exact: true }).click();
   await page.waitForURL(origin + '/login');
   await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
-  assert.equal(await headerHandle.evaluate(n => n.isConnected), true);
+  assert.equal(await page.evaluate(() => window.__identityDoc), 'retained');
   assert.equal(await colorCheck('dark'), dark);
-  await header.getByRole('link', { name: 'Identity', exact: true }).click();
+  await page.goBack();
+  await page.waitForURL(origin + '/zh/login');
+  await page.goBack();
+  await page.waitForURL(origin + '/zh/');
+  await header.getByRole('button', { name: '语言' }).click();
+  await page.getByRole('menu').getByText('English', { exact: true }).click();
   await page.waitForURL(origin + '/');
   await header.getByRole('button', { name: 'Switch to light theme' }).click();
   const light = await colorCheck('light');
@@ -242,11 +255,11 @@ try {
   await page.waitForURL(origin + '/');
   await page.getByRole('link', { name: 'Create an account' }).click();
   await page.waitForURL(origin + '/register');
+  await expect(page.getByRole('main')).toHaveClass('nt-authlayout__content');
   await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
-  const { passwordlessAvailable } = await page.evaluate(async () => (await fetch('/account/config')).json());
-  assert.deepEqual(await page.locator('form input').evaluateAll(nodes => nodes.map(n => n.name)),
-    passwordlessAvailable ? ['email'] : ['email', 'password']);
-  if (!passwordlessAvailable) await expect(page.locator('form')).toHaveAttribute('method', 'post');
+  await expect(page.getByLabel('Password', { exact: true })).toBeVisible();
+  assert.deepEqual(await page.locator('form input').evaluateAll(nodes => nodes.map(n => n.name)), ['email', 'password']);
+  await expect(page.locator('form')).toHaveAttribute('method', 'post');
   const slow = await context.newPage();
   let releaseScript;
   const scriptGate = new Promise(resolve => { releaseScript = resolve; });
@@ -257,11 +270,11 @@ try {
   try {
     const response = await slow.goto(origin + '/register', { waitUntil: 'commit' });
     assert.doesNotMatch((await response.body()).toString('utf8'), /<form\b|name="password"/);
-    await expect(slow.getByRole('main')).toHaveAttribute('aria-busy', 'true');
+    await expect(slow.getByRole('main').getByRole('status')).toHaveText('Loading…');
     await expect(slow.locator('input, form')).toHaveCount(0);
   } finally { releaseScript(); }
-  await expect(slow.getByLabel('Email', { exact: true })).toBeVisible();
-  if (!passwordlessAvailable) await expect(slow.locator('form')).toHaveAttribute('method', 'post');
+  await expect(slow.getByLabel('Password', { exact: true })).toBeVisible();
+  await expect(slow.locator('form')).toHaveAttribute('method', 'post');
   assert.equal(new URL(slow.url()).search, '');
   await slow.close();
   const isolated = await mkdtemp(join(profile, 'no-script-'));

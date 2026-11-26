@@ -74,7 +74,7 @@ function Identity({ route, navigate, loginControls }: { route: Route; navigate: 
   const authSection = section === 'login' || section === 'register' || section === 'recover' || section === 'reset' || section === 'verify-email' || section === 'invite';
   return <AppContext.Provider value={app}>
     {waiting ? (authSection
-      ? <AuthLayout controls={loginControls}><div className="max-w-md"><Loaded source={{ data: undefined, error: failure, reload: start }}>{() => null}</Loaded></div></AuthLayout>
+      ? <AuthLayout controls={loginControls}><div className="w-full max-w-md"><Loaded source={{ data: undefined, error: failure, reload: start }}>{() => null}</Loaded></div></AuthLayout>
       : <main className={`${container} flex-1 py-8 md:py-12`}><div className="max-w-md"><Loaded source={{ data: undefined, error: failure, reload: start }}>{() => null}</Loaded></div></main>)
       : section === 'workspace' ? <Workspace route={route} />
       : section === 'admin' ? <Admin route={route} />
