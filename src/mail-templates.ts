@@ -9,11 +9,15 @@ const font = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif";
 const paper = '#f5f1e6'; // niltavi-ignore color-literal
 const surface = '#f6f3ea'; // niltavi-ignore color-literal
 const surfaceBorder = '#d5d6cb'; // niltavi-ignore color-literal
-const fieldBorder = '#c4c6bc'; // niltavi-ignore color-literal
 const separator = '#e3e1d7'; // niltavi-ignore color-literal
 const ink = '#283e38'; // niltavi-ignore color-literal
 const muted = '#5f6f67'; // niltavi-ignore color-literal (Niltava --muted with 6% --surface.)
 const white = '#fff'; // niltavi-ignore color-literal
+const codeSurface = '#dfeeff'; // niltavi-ignore color-literal (niltava-100)
+const codeBorder = '#9ec3ff'; // niltavi-ignore color-literal (niltava-300)
+const codeForeground = '#3345cf'; // niltavi-ignore color-literal (--accent-soft-foreground)
+const expirySurface = '#faedb9'; // niltavi-ignore color-literal (gold-100)
+const expiryForeground = '#824d00'; // niltavi-ignore color-literal (--warning-soft-foreground)
 const prominentText = `color:${ink};font-weight:600`;
 const cardWidth = 440;
 const escape = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;')
@@ -26,16 +30,21 @@ type Notice = {
   introduction: string;
   code?: string;
   actions?: Action[];
+  expiresIn?: string;
   note?: string;
 };
 
-function render({ subject, title, introduction, code, actions = [], note }: Notice): Message {
-  const text = [introduction, code, ...actions.map(({ label, url }) => `${label}: ${url}`), note,
+function render({ subject, title, introduction, code, actions = [], expiresIn, note }: Notice): Message {
+  const noteText = [expiresIn && `This code expires in ${expiresIn}.`, note].filter(Boolean).join(' ');
+  const noteHtml = [expiresIn && `This code expires in <span style="background:${expirySurface};border-radius:4px;padding:1px 4px;color:${expiryForeground};white-space:nowrap">${escape(expiresIn)}.</span>`,
+    note && escape(note)].filter(Boolean).join(' ');
+  const text = [introduction, code, ...actions.map(({ label, url }) => `${label}: ${url}`), noteText,
     `Need help? Contact ${mailSupport}.`].filter(Boolean).join('\n\n');
+  // Indent slightly to counterbalance the tracking after the last digit.
   const codePanel = code ? `
     <table role="presentation" cellspacing="0" cellpadding="0" border="0">
-      <tr><td align="center" bgcolor="${paper}"
-        style="background:${paper};border:1px solid ${fieldBorder};border-radius:10px;padding:12px 20px;font-family:${font};font-size:28px;line-height:36px;${prominentText};font-variant-numeric:tabular-nums;letter-spacing:.16em">${escape(code)}</td></tr>
+      <tr><td align="center" valign="middle" bgcolor="${codeSurface}"
+        style="background:${codeSurface};border:1px solid ${codeBorder};border-radius:10px;padding:12px 20px;color:${codeForeground};font-family:${font};font-size:28px;font-weight:600;line-height:36px;text-align:center;vertical-align:middle;font-variant-numeric:tabular-nums;letter-spacing:.16em;text-indent:.2em">${escape(code)}</td></tr>
     </table>` : '';
   const actionLinks = actions.map(({ label, url }, index) => `
     <p style="margin:${index === 0 ? '0' : '12px 0 0'}">
@@ -62,13 +71,13 @@ function render({ subject, title, introduction, code, actions = [], note }: Noti
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:${cardWidth}px;table-layout:fixed">
         <tr><td class="mail-copy" align="left" bgcolor="${surface}"
           style="background:${surface};border:1px solid ${surfaceBorder};border-radius:16px;padding:20px;color:${muted};font-family:${font};font-size:13px;line-height:20px;text-align:left;overflow-wrap:break-word">
-          <p align="right" style="margin:0 0 12px;line-height:24px;text-align:right">
-            <img src="${brandImage}" width="66" height="24" alt="Niltavi" style="display:inline-block;width:66px;height:24px;vertical-align:top;border:0">
+          <p align="right" style="margin:0 0 12px;line-height:20px;text-align:right">
+            <img src="${brandImage}" width="54" height="20" alt="Niltavi" style="display:inline-block;width:54px;height:20px;vertical-align:top;border:0">
           </p>
           <h1 class="mail-title" style="margin:0 0 4px;font-size:22px;line-height:28px;${prominentText}">${escape(title)}</h1>
           <p style="margin:0 0 20px">${escape(introduction)}</p>
           ${codePanel}${actionLinks}
-          ${note ? `<p style="margin:16px 0 0">${escape(note)}</p>` : ''}
+          ${noteHtml ? `<p style="margin:16px 0 0">${noteHtml}</p>` : ''}
           <p style="margin:20px 0 0;padding:12px 0 0;border-top:1px solid ${separator};font-size:12px;line-height:18px">Need help? Contact <a href="mailto:${mailSupport}" style="color:${muted};text-decoration:underline">${mailSupport}</a>.</p>
         </td></tr>
       </table>
@@ -86,7 +95,8 @@ export const messages = {
     title: 'Your verification code',
     introduction: 'Enter this code in Niltavi Identity.',
     code,
-    note: "This code expires in 15 minutes. If you didn't request it, ignore this email.",
+    expiresIn: '15 minutes',
+    note: "If you didn't request it, ignore this email.",
   }),
   existing: (origin: string, language: 'en' | 'zh') => {
     const prefix = origin + (language === 'zh' ? '/zh' : '');
