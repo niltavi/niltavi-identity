@@ -14,6 +14,7 @@ import selfsigned from 'selfsigned';
 import { Agent, getGlobalDispatcher, setGlobalDispatcher } from 'undici';
 import { createClient, hosts, loginCookie } from '../lab/fixtures.js';
 import { buildRelyingParty } from '../lab/relying-party.js';
+import { schemaVersion } from '../src/database.js';
 
 const execute = promisify(execFile);
 type RP = Awaited<ReturnType<typeof buildRelyingParty>>;
@@ -41,7 +42,7 @@ async function authorize(page: Page, rp: RP) {
 
 async function credentials(page: Page, email: string, password: string) {
   await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(password);
+  await page.locator('input[name=password]').fill(password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
 }
 
@@ -169,8 +170,8 @@ test('provisioned accounts and clients survive restart with real OIDC, revocatio
       writeFile(passwordPath, pass, { mode: 0o600 }),
     ]);
     await test.step('Provision through the operator CLI and reject repeats/invalid registration', async () => {
-      await expect(cli('migrate')).resolves.toEqual({ version: 5, changed: true });
-      await expect(cli('migrate')).resolves.toEqual({ version: 5, changed: false });
+      await expect(cli('migrate')).resolves.toEqual({ version: schemaVersion, changed: true });
+      await expect(cli('migrate')).resolves.toEqual({ version: schemaVersion, changed: false });
       await cli('keys', 'init');
       await expect(cli('keys', 'init')).rejects.toThrow('already exists');
       accountId = (await cli<{ id: string }>('account', 'create', email)).id;
@@ -201,7 +202,7 @@ test('provisioned accounts and clients survive restart with real OIDC, revocatio
       expect(new URL(page.url()).searchParams.get('error')).toBe('invalid_request');
       await authorize(page, a);
       await credentials(page, email, 'wrong test password');
-      await expect(page.getByRole('alert')).toContainText('The email or password is incorrect.');
+      await expect(page.getByText('The email or password is incorrect.', { exact: true })).toBeVisible();
       await credentials(page, email, pass);
       await expectLogin(page, a);
       const token = await serverSession(page, a);
@@ -276,9 +277,10 @@ test('provisioned accounts and clients survive restart with real OIDC, revocatio
       await expect(b.exchange(pending.redirect, pending.flow)).rejects.toMatchObject({ error: 'invalid_grant' });
       await authorize(page, a);
       await credentials(page, email, pass);
-      await expect(page.getByRole('alert')).toContainText('The email or password is incorrect.');
+      await expect(page.getByText('The email or password is incorrect.', { exact: true })).toBeVisible();
       expect(await cli('account', 'enable', email)).toMatchObject({ enabled: true, changed: true });
       expect((await a.introspect(old.accessToken)).active).toBe(false);
+      await page.reload();
       await credentials(page, email, pass);
       await expectLogin(page, a);
       await authorize(other, b);
@@ -291,7 +293,7 @@ test('provisioned accounts and clients survive restart with real OIDC, revocatio
       expect(await profileStatus(other)).toBe(401);
       await authorize(page, a);
       await credentials(page, email, pass);
-      await expect(page.getByRole('alert')).toContainText('The email or password is incorrect.');
+      await expect(page.getByText('The email or password is incorrect.', { exact: true })).toBeVisible();
       await credentials(page, email, newPass);
       await expectLogin(page, a);
       await authorize(other, b);

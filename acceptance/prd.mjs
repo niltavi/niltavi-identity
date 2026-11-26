@@ -742,7 +742,7 @@ try {
   assert.ok(!inbox.slice(inboxMark).some(({ to }) => to === 'unicode@example.test'), 'An unverified address receives no recovery link');
   const recovered = browser();
   const mailedPassword = secret(`mailed reset ${randomBytes(6).toString('hex')}`);
-  assert.equal((await recovered.post('/account/reset', { token: mailedToken, password: 'qwerty123456' })).body.error, 'common_password');
+  assert.equal((await recovered.post('/account/reset', { token: mailedToken, password: 'qwerty123456' })).body.error, 'common_password'); // gitleaks:allow Public weak-password fixture.
   const resetResult = await recovered.post('/account/reset', { token: mailedToken, password: mailedPassword });
   assert.deepEqual([resetResult.status, resetResult.body.agentTokens], [200, []]);
   assert.equal((await recovered.post('/account/reset', { token: mailedToken, password: mailedPassword })).status, 400);

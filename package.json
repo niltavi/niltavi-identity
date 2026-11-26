@@ -10,7 +10,7 @@
   "scripts": {
     "check": "tsc --noEmit && tsc --noEmit --project preview/tsconfig.json && tsc --noEmit --project web/tsconfig.json && tsc --noEmit --project sdk/tsconfig.json",
     "test:lab": "playwright test",
-    "test:service": "npm run build:service && playwright test --config playwright.service.config.ts",
+    "test:service": "npm run build:service && npm run build:web && playwright test --config playwright.service.config.ts",
     "test:account": "npm run build:service && node acceptance/browser-auth.mjs",
     "test:docker": "npm run build:service && node acceptance/docker.mjs",
     "build:service": "tsc --project tsconfig.service.json",
