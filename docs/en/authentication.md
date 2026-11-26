@@ -107,5 +107,5 @@ The audit trail records sign-ins and failed sign-ins, password resets, membershi
 ## Deployment profiles
 
 - `self-hosted` is the default.
-- `hosted` requires HTTPS issuers on `niltavi.com` or one of its subdomains and supports delivery of verification codes through Tencent SES.
+- `hosted` requires HTTPS issuers on `niltavi.com` or one of its subdomains. It supports SMTP delivery and can optionally use Tencent SES for verification codes.
 - `acceptance` enables scoped test mailbox domains and scoped account operators for isolated test runs.

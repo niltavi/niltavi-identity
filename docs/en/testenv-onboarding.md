@@ -1,6 +1,6 @@
 # Identity test environment onboarding
 
-The public test issuer is [Identity testenv](https://identity.testenv.niltavi.com/). The testenv Compose override enables email and password signup at this exact HTTPS origin. It sends no email. Newly created accounts are ordinary accounts with `email_verified=false`. Existing accounts retain their subject, password, verification status, and permissions. This override is for the test environment only. Hosted mode outside this exception requires Tencent SES.
+The public test issuer is [Identity testenv](https://identity.testenv.niltavi.com/). The testenv Compose override enables email and password signup at this exact HTTPS origin. It sends no email. Newly created accounts are ordinary accounts with `email_verified=false`. Existing accounts retain their subject, password, verification status, and permissions. This override is for the test environment only. The hosted Identity instance in China sends transactional email through Lark SMTP.
 
 ## Relying parties
 
@@ -29,7 +29,9 @@ In verified mode, registration returns `202`, then email and code confirmation i
 
 Use `compose.public-testenv.yaml` only for the existing public testenv stack, alongside its gateway origin and TLS overlays. Use the same PostgreSQL volume and signing key files. Apply the additive migrations before restarting only the Identity service. Keep the prior runtime, environment and overlay stack for rollback. Do not run the acceptance mail overlay in the public stack. A direct request to the legacy IP homepage or registration path directs the browser to the canonical test hostname. The primary IP still supports its health probe and existing sessions.
 
-Mount `IDENTITY_TENCENT_SES_CONFIG_FILE` as a private file readable by Identity. The JSON fields are `secretId`, `secretKey`, optional `token`, `region`, `fromEmail`, numeric `templateId`, and `codeVariable` (defaults to `code`). Identity uses one English template and an authenticated sender in `ap-guangzhou` or `ap-hongkong`. It sends an individual triggered verification message over HTTPS. [SendEmail contract](https://cloud.tencent.com/document/api/1288/51034)
+### Optional Tencent SES delivery
+
+To use Tencent SES for verification codes, mount `IDENTITY_TENCENT_SES_CONFIG_FILE` as a private file readable by Identity. The JSON fields are `secretId`, `secretKey`, optional `token`, `region`, `fromEmail`, numeric `templateId`, and `codeVariable` (defaults to `code`). Identity uses one English template and an authenticated sender in `ap-guangzhou` or `ap-hongkong`. It sends an individual triggered verification message over HTTPS. [SendEmail contract](https://cloud.tencent.com/document/api/1288/51034)
 
 Generate the `CreateEmailTemplate` request with both formats from the same source as the SMTP message:
 
