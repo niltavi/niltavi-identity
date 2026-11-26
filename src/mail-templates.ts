@@ -44,15 +44,15 @@ function render({ subject, title, introduction, code, actions = [], note }: Noti
       <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width:520px">
         <tr><td bgcolor="#ffffff" style="background:#ffffff;border-radius:18px;padding:32px 24px">
           <div style="text-align:center">
+            <p align="center" style="margin:0 0 16px">
+              <img src="${brandImage}" width="82" height="30" alt="Niltavi" style="display:inline-block;width:82px;height:30px;vertical-align:middle;border:0">
+            </p>
             <h1 style="font-size:25px;line-height:1.25;margin:0 0 12px;font-weight:700;color:#1b1d22">${escape(title)}</h1>
             <p style="margin:0">${escape(introduction)}</p>
             ${codePanel}${actionLinks}
             ${note ? `<p style="margin:22px 0 0;font-size:14px;color:#616976">${escape(note)}</p>` : ''}
           </div>
-          <p style="margin:24px 0 0;font-size:14px;color:#616976">Need help? Contact <a href="mailto:${mailSupport}" style="color:#2457a6;text-decoration:underline">${mailSupport}</a>.</p>
-        </td></tr>
-        <tr><td align="center" style="padding:18px 0 0">
-          <img src="${brandImage}" width="82" height="30" alt="Niltavi" style="display:block;width:82px;height:30px;border:0">
+          <p style="margin:24px 0 0;font-size:12px;color:#6b7280">Need help? Contact <a href="mailto:${mailSupport}" style="color:#6b7280;text-decoration:underline">${mailSupport}</a>.</p>
         </td></tr>
       </table>
       <!--[if mso]></td></tr></table><![endif]-->

@@ -42,4 +42,4 @@ node scripts/ses-code-template.mjs > ses-code-template.json
 
 Pass the configured `codeVariable` as the script's first argument if it differs from `code`. Submit the request in the selected SES region, wait for approval, then switch `templateId` to the approved template. Verify placement in authorized personal and business inboxes using the production sender. Confirm that the sending domain's SPF and DKIM setup aligns with DMARC. [CreateEmailTemplate contract](https://cloud.tencent.com/document/api/1288/51042) · [Gmail sender guidelines](https://support.google.com/mail/answer/81126)
 
-The email footer uses a transparent PNG exported from `web/src/brand/niltavi-logo-light.svg` at 3× its display size. Deploy the Identity web build to `identity.niltavi.com` to make the image available.
+The email wordmark uses a transparent PNG exported from `web/src/brand/niltavi-logo-light.svg` at 3× its display size. Deploy the Identity web build to `identity.niltavi.com` to make the image available.
