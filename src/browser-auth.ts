@@ -268,6 +268,27 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     return reply.code(204).send();
   });
 
+  app.post('/account/password', guard, async (request, reply) => {
+    const viewer = await web.viewer(request);
+    if (!viewer) return failure(reply, 401, 'sign_in_required');
+    const submitted = fields(request, 'current', 'password');
+    if (!submitted) return failure(reply, 400, 'unexpected_body');
+    const [current, password] = submitted;
+    if (!await loginRateAllowed(pool, request.ip, viewer.email, 'change-password', 5)) return failure(reply, 429, 'try_later');
+    const account = await getLogin(pool, viewer.email);
+    const authentic = await verifyAccountPassword(current ?? '', account?.password_hash, backupHash);
+    if (!authentic || !account?.enabled || account.id !== viewer.id) return failure(reply, 403, 'incorrect_password');
+    try {
+      const hash = await passwordHash(password ?? '', viewer.email);
+      await pool.query('UPDATE accounts SET password_hash = $1 WHERE id = $2', [hash, viewer.id]);
+      await audit(pool, 'account.password_changed', viewer.id, viewer.id);
+    } catch (error) {
+      if (error instanceof PasswordRejected) return failure(reply, 400, error.code);
+      throw error;
+    }
+    return reply.code(204).send();
+  });
+
   app.post('/account/preferences', guard, async (request, reply) => {
     const viewer = await web.viewer(request);
     if (!viewer) return failure(reply, 401, 'sign_in_required');
@@ -449,6 +470,9 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
 
   const verifyCodeCookie = '__Host-niltavi-email-verify';
   const verifyCodeSeconds = 900;
+
+  const disable2faCookie = '__Host-niltavi-disable-2fa';
+  const disable2faSeconds = 900;
 
   app.post('/account/email/verification-code', guard, async (request, reply) => {
     const viewer = await web.viewer(request);
@@ -714,13 +738,74 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     return reply.code(204).send();
   });
 
+  app.post('/account/second-factor/disable-request', guard, async (request, reply) => {
+    const viewer = await web.viewer(request);
+    if (!viewer) return failure(reply, 401, 'sign_in_required');
+    if (!fields(request)) return failure(reply, 400, 'unexpected_body');
+    if (!viewer.secondFactorEnabled) return failure(reply, 409, 'second_factor_not_enabled');
+    if (!await mailer.codes()) return failure(reply, 503, 'delivery_unavailable');
+    if (!await rateAllowed(pool, [[`disable-2fa:${viewer.id}`, 3, 900], [`disable-2fa:source:${request.ip}`, 20]])) {
+      return failure(reply, 429, 'try_later');
+    }
+    const enrollment = randomBytes(32).toString('base64url');
+    const code = verificationCode();
+    await pool.query('DELETE FROM disable_2fa_codes WHERE expires_at <= now()');
+    await pool.query(`INSERT INTO disable_2fa_codes (account_id, token_digest, email, expires_at, next_resend_at)
+      VALUES ($1, $2, $3, now() + $4 * interval '1 second', now() + $5 * interval '1 second')
+      ON CONFLICT (account_id) DO UPDATE SET token_digest = EXCLUDED.token_digest, email = EXCLUDED.email,
+        attempts = 0, expires_at = EXCLUDED.expires_at, next_resend_at = EXCLUDED.next_resend_at`,
+    [viewer.id, codeKey(enrollment, code), viewer.email, disable2faSeconds, resendSeconds]);
+    mailer.later(() => mailer.sendCode(viewer.email, code));
+    setBrowserCookie(reply, disable2faCookie, enrollment, disable2faSeconds);
+    return reply.code(202).send({ accepted: true, email: viewer.email });
+  });
+
+  app.post('/account/second-factor/disable-resend', guard, async (request, reply) => {
+    const viewer = await web.viewer(request);
+    if (!viewer) return failure(reply, 401, 'sign_in_required');
+    if (!fields(request)) return failure(reply, 400, 'unexpected_body');
+    if (!viewer.secondFactorEnabled) return failure(reply, 409, 'second_factor_not_enabled');
+    if (!await mailer.codes()) return failure(reply, 503, 'delivery_unavailable');
+    if (!await rateAllowed(pool, [[`disable-2fa:${viewer.id}`, 3, 900], [`disable-2fa:source:${request.ip}`, 20]])) {
+      return failure(reply, 429, 'try_later');
+    }
+    const enrollment = randomBytes(32).toString('base64url');
+    const code = verificationCode();
+    const changed = await pool.query(
+      `UPDATE disable_2fa_codes SET token_digest = $1, attempts = 0,
+          expires_at = now() + $2 * interval '1 second', next_resend_at = now() + $3 * interval '1 second'
+        WHERE account_id = $4 AND expires_at > now() AND next_resend_at <= now()`,
+      [codeKey(enrollment, code), disable2faSeconds, resendSeconds, viewer.id]);
+    if (!changed.rowCount) return failure(reply.header('retry-after', String(resendSeconds)), 429, 'resend_wait');
+    mailer.later(() => mailer.sendCode(viewer.email, code));
+    setBrowserCookie(reply, disable2faCookie, enrollment, disable2faSeconds);
+    return reply.code(202).send({ accepted: true });
+  });
+
   app.post('/account/second-factor/disable', guard, async (request, reply) => {
     const viewer = await web.viewer(request);
     if (!viewer) return failure(reply, 401, 'sign_in_required');
-    if (!await secondFactor(viewer.id, fields(request, 'code')?.[0], true)) return failure(reply, 400, 'invalid_code');
-    await pool.query('UPDATE accounts SET totp_secret = NULL, totp_confirmed_at = NULL, totp_last_step = NULL WHERE id = $1', [viewer.id]);
-    await pool.query('UPDATE web_sessions SET second_factor_at = NULL WHERE account_id = $1', [viewer.id]);
-    await audit(pool, 'account.second_factor_removed', viewer.id, viewer.id);
+    const [code] = fields(request, 'code') ?? [];
+    const enrollment = readBrowserCookie(request, disable2faCookie);
+    if (!enrollment || !code || !/^\d{6}$/.test(code)) return failure(reply, 400, 'invalid_code');
+    if (!await rateAllowed(pool, [[`disable-2fa-attempt:${viewer.id}`, 12], [`disable-2fa-day:${viewer.id}`, 30, 86_400]])) {
+      return failure(reply, 429, 'try_later');
+    }
+    const disabled = await transaction(pool, async (db) => {
+      const row = (await db.query<{ email: string }>(
+        `DELETE FROM disable_2fa_codes WHERE account_id = $1 AND token_digest = $2 AND expires_at > now() AND attempts < $3 RETURNING email`,
+        [viewer.id, codeKey(enrollment, code), codeAttempts])).rows[0];
+      if (!row) return false;
+      await db.query('UPDATE accounts SET totp_secret = NULL, totp_confirmed_at = NULL, totp_last_step = NULL WHERE id = $1', [viewer.id]);
+      await db.query('UPDATE web_sessions SET second_factor_at = NULL WHERE account_id = $1', [viewer.id]);
+      await audit(db, 'account.second_factor_removed', viewer.id, viewer.id);
+      return true;
+    });
+    if (!disabled) {
+      await pool.query('UPDATE disable_2fa_codes SET attempts = attempts + 1 WHERE account_id = $1', [viewer.id]);
+      return failure(reply, 400, 'invalid_code');
+    }
+    setBrowserCookie(reply, disable2faCookie, '', 0);
     return reply.code(204).send();
   });
 

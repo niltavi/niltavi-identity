@@ -17,7 +17,7 @@ import { SidebarLayout } from './sidebar-layout';
 import { followRoute, pathFor } from './site';
 import type { Route } from './site';
 import {
-  Choice, CodeField, ConfirmButton, CopyButton, Empty, Loaded, Notice, PageLink, Panel, Secret, State, TaskFeedback, readForm, useApp, useLoad, useTask, useTime,
+  Choice, CodeField, ConfirmButton, CopyButton, Empty, Loaded, Notice, PageLink, Panel, ResendCodeButton, Secret, State, TaskFeedback, readForm, useApp, useLoad, useTask, useTime,
 } from './ui';
 
 export function Workspace({ route }: { route: Route }) {
@@ -266,7 +266,7 @@ function Sessions() {
         </li>)}
       </ul>}</Loaded>
     </Panel>
-    <Panel title={t('Sign out', '退出登录')} description={t('To sign out of one application only, use “Sign out of this app” inside that application.', '只想退出某个应用时，请在该应用内使用「退出当前应用」。')}>
+    <Panel title={t('Sign out', '退出登录')} description={t('To sign out of one application only, use "Sign out of this app" inside that application.', '只想退出某个应用时，请在该应用内使用「退出当前应用」。')}>
       <div className="grid gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="min-w-0 text-sm text-muted">{t('Ends every session on every device, including all applications.', '结束所有设备上的全部会话，包括所有应用。')}</p>
@@ -526,9 +526,11 @@ function QrCode({ uri, label }: { uri: string; label: string }) {
 function Security() {
   const { t, language, account, refresh } = useApp();
   const task = useTask();
+  const passwordTask = useTask();
   const [setup, setSetup] = useState<{ secret: string; uri: string }>();
   const [codeError, setCodeError] = useState<string>();
   const [disableOpen, setDisableOpen] = useState(false);
+  const [disableStep, setDisableStep] = useState<{ email?: string }>();
   if (!account) return null;
   const submitCode = (path: string, done: string, after?: () => void) => (event: Parameters<typeof readForm>[0]) => {
     const code = readForm(event)('code').trim();
@@ -554,6 +556,7 @@ function Security() {
           if (pending) return;
           task.setError(undefined);
           setCodeError(undefined);
+          setDisableStep(undefined);
           setDisableOpen(open);
         }}>
           <Button size="sm" variant="secondary">{t('Manage two-step verification', '管理两步验证')}</Button>
@@ -563,20 +566,35 @@ function Security() {
                 <Modal.Header>
                   <Modal.Heading>{t('Turn off two-step verification?', '关闭两步验证？')}</Modal.Heading>
                 </Modal.Header>
-                <Form className="contents" validationBehavior="native" onSubmit={submitCode('/account/second-factor/disable',
-                  t('Two-step verification is off.', '两步验证已关闭。'), () => setDisableOpen(false))}>
+                {!disableStep ? <div className="contents">
                   <Modal.Body className="grid gap-4">
-                    <p className="text-muted">{t('You’ll need to set up two-step verification again before you can change instance settings.',
-                      '关闭后，需重新设置两步验证才能更改实例设置。')}</p>
+                    <p className="text-muted">{t('A verification code will be sent to your email address to confirm this change.',
+                      '将向你的邮箱发送验证码以确认此操作。')}</p>
                     {task.error && <TaskFeedback task={task} />}
-                    <CodeField label={t('Current code from your authenticator app', '验证器中的当前验证码')} error={codeError}
-                      onInput={() => setCodeError(undefined)} />
                   </Modal.Body>
                   <Modal.Footer className="flex-wrap">
-                    <Button type="button" slot="close" variant="tertiary" isDisabled={pending}>{t('Cancel', '取消')}</Button>
+                    <Button type="button" slot="close" variant="tertiary">{t('Cancel', '取消')}</Button>
+                    <Button variant="danger" isPending={task.pending === 'request'} onPress={() => void task.run('request', async () => {
+                      const result = await call<{ accepted: boolean; email: string }>('/account/second-factor/disable-request', {});
+                      setDisableStep({ email: result.email });
+                    })}>{t('Send verification code', '发送验证码')}</Button>
+                  </Modal.Footer>
+                </div> : <Form className="contents" validationBehavior="native" onSubmit={submitCode('/account/second-factor/disable',
+                  t('Two-step verification is off.', '两步验证已关闭。'), () => setDisableOpen(false))}>
+                  <Modal.Body className="grid gap-4">
+                    <p className="text-muted">{t('Enter the code sent to ', '请输入发送至 ')}<strong>{disableStep.email}</strong>{t(' to turn off two-step verification.', ' 的验证码以关闭两步验证。')}</p>
+                    {task.error && <TaskFeedback task={task} />}
+                    <CodeField label={t('Verification code', '验证码')} error={codeError}
+                      onInput={() => setCodeError(undefined)} />
+                    <ResendCodeButton onResend={() => void task.run('resend', async () => {
+                      await call('/account/second-factor/disable-resend', {});
+                    })} isPending={task.pending === 'resend'} />
+                  </Modal.Body>
+                  <Modal.Footer className="flex-wrap">
+                    <Button type="button" variant="tertiary" isDisabled={pending} onPress={() => { setDisableStep(undefined); setCodeError(undefined); }}>{t('Back', '返回')}</Button>
                     <Button type="submit" variant="danger" isPending={pending}>{t('Turn off two-step verification', '关闭两步验证')}</Button>
                   </Modal.Footer>
-                </Form>
+                </Form>}
               </Modal.Dialog>
             </Modal.Container>
           </Modal.Backdrop>
@@ -608,9 +626,35 @@ function Security() {
       })}>{t('Set up two-step verification', '设置两步验证')}</Button></div>
     </>;
   }
-  return <Panel title={t('Two-step verification', '两步验证')}
-    description={t('A code from an authenticator app, asked for when you change instance settings.', '来自验证器应用的验证码，在更改实例设置时需要输入。')}>
-    {!disableOpen && <TaskFeedback task={task} />}
-    {body}
-  </Panel>;
+  return <>
+    <Panel title={t('Password', '密码')}
+      description={t('Change the password used to sign in to your account.', '更改登录密码。')}>
+      <TaskFeedback task={passwordTask} />
+      <Form className="grid max-w-md gap-4" validationBehavior="native" onSubmit={event => {
+        const form = readForm(event);
+        const current = form('current');
+        const password = form('password');
+        void passwordTask.run('save', async () => {
+          await call('/account/password', { current, password });
+          await refresh();
+          return t('Password changed.', '密码已修改。');
+        });
+      }}>
+        <TextField name="current" type="password" autoComplete="current-password" isRequired>
+          <Label>{t('Current password', '当前密码')}</Label>
+          <Input />
+        </TextField>
+        <TextField name="password" type="password" autoComplete="new-password" isRequired minLength={12} maxLength={256}>
+          <Label>{t('New password', '新密码')}</Label>
+          <Input />
+        </TextField>
+        <div><Button type="submit" isPending={passwordTask.pending === 'save'}>{t('Change password', '修改密码')}</Button></div>
+      </Form>
+    </Panel>
+    <Panel title={t('Two-step verification', '两步验证')}
+      description={t('A code from an authenticator app, asked for when you change instance settings.', '来自验证器应用的验证码，在更改实例设置时需要输入。')}>
+      {!disableOpen && <TaskFeedback task={task} />}
+      {body}
+    </Panel>
+  </>;
 }
