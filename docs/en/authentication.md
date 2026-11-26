@@ -4,7 +4,9 @@ This page states what Identity guarantees to people, to applications, and to ope
 
 ## Accounts and passwords
 
-An account is an email address and a password. Every account owns a personal space and can belong to any number of teams.
+An account has an email address and may have a password. Every account owns a personal space and can belong to any number of teams.
+
+When email codes are available, the same form handles sign-in and first-time registration. An existing account signs in after verification. A new address becomes a verified account and signs in immediately if the instance's registration policy permits it. The password form links to password registration when registration is enabled.
 
 One password rule applies everywhere: 12 to 256 characters counted by character, no composition requirement, and no password from the list of commonly breached ones. Pasting and password managers work. Applications never see or store passwords and must not add a rule of their own.
 
@@ -15,6 +17,10 @@ An address is verified by a code or a link mailed to it, or by an instance admin
 ## Signing in through an application
 
 Identity is an OpenID Connect provider. Discover it at `/.well-known/openid-configuration` on the issuer.
+
+Niltavi products share accounts and a sign-in session through the official issuer. A self-hosted instance supplies its own accounts and sessions. A connected application can use either issuer as its primary login or offer it alongside its own login methods. It can link an authorized Identity account to an existing application account and retain its own profile and permissions.
+
+Upstream sign-in with Google or GitHub is a separate integration, in which Identity accepts a provider's authentication and then issues its own application session. The current service implements downstream OIDC and email or password sign-in. SMS delivery and upstream social sign-in have yet to be integrated.
 
 - Authorization code with S256 PKCE is the only flow. The redirect address must equal the registered one exactly.
 - Registered applications authenticate with `client_secret_basic`.

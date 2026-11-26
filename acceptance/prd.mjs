@@ -634,6 +634,32 @@ try {
   assert.equal((await otp.session.get('/account/session')).body.account.id, memberId);
   passed('sign-in with an email code completes the original app request and opens an Identity session');
 
+  const automatic = flow(one);
+  const automaticStart = await automatic.start();
+  const automaticPath = new URL(automaticStart.location, issuer).pathname;
+  const automaticEmail = 'automatic-sign-in@example.test';
+  const firstCodeMail = inbox.length;
+  assert.equal((await automatic.session.post(automaticPath, { email: automaticEmail })).status, 202);
+  const [, appSignupCode] = await mail(automaticEmail, /^(\d{6})$/m, firstCodeMail);
+  const automaticStandalone = browser();
+  const nextCodeMail = inbox.length;
+  assert.equal((await automaticStandalone.post('/account/login-code', { email: automaticEmail })).status, 202);
+  const [, standaloneSignupCode] = await mail(automaticEmail, /^(\d{6})$/m, nextCodeMail);
+  await assert.rejects(getAccount(pool, automaticEmail), /Account does not exist/);
+  const [appSession, standaloneSession] = await Promise.all([
+    automatic.session.post(automaticPath, { code: appSignupCode }),
+    automaticStandalone.post('/account/login-verify', { code: standaloneSignupCode }),
+  ]);
+  assert.equal(appSession.status, 200);
+  assert.equal(standaloneSession.status, 204);
+  const automaticReturn = await automatic.follow(await automatic.session.get(appSession.body.continueTo));
+  assert.equal(new URL(automaticReturn.location).searchParams.get('state'), automatic.state);
+  const automaticClaims = decodeJwt((await automatic.tokens(automaticReturn.location)).body.id_token);
+  const automaticAccount = (await automaticStandalone.get('/account/session')).body.account;
+  assert.equal(automaticClaims.sub, automaticAccount.id);
+  assert.deepEqual([automaticClaims.email, automaticClaims.email_verified, automaticAccount.emailVerified], [automaticEmail, true, true]);
+  passed('verifying the same new email concurrently creates one verified account and signs it in through both entry points');
+
   const signupFlow = flow(one);
   const signupStart = await signupFlow.start();
   const signupLogin = new URL(signupStart.location, issuer).pathname;
@@ -748,20 +774,40 @@ try {
   assert.equal((await invited.post('/account/verify', { email: 'invited@example.test', code: invitedCode })).status, 201);
   assert.equal((await invited.post('/account/invitation/accept', { token: mailedInviteToken })).body.org, team.id);
   assert.equal((await invited.get(`/account/orgs/${team.id}`)).body.org.role, 'admin');
+  const otpInviteEmail = 'invited-by-code@example.test';
+  const otpInvite = await owner.post(`/account/orgs/${team.id}/invitations`, { email: otpInviteEmail, role: 'member' });
+  const otpInviteToken = secret(otpInvite.body.link.split('#')[1]);
+  const otpInvited = browser();
+  const otpInviteMail = inbox.length;
+  assert.equal((await otpInvited.post('/account/login-code', { email: otpInviteEmail, invitation: otpInviteToken })).status, 202);
+  const [, otpInviteCode] = await mail(otpInviteEmail, /^(\d{6})$/m, otpInviteMail);
+  assert.equal((await otpInvited.post('/account/login-verify', { code: otpInviteCode, invitation: otpInviteToken })).status, 204);
+  assert.equal((await otpInvited.post('/account/invitation/accept', { token: otpInviteToken })).body.org, team.id);
   assert.equal((await owner.post('/admin/api/registration', { policy: 'open' })).status, 200);
   passed('one invitation: a new address registers, verifies and joins the team; invite-only instances refuse everyone else');
 
   const closing = browser();
   const closingEmail = 'pending-close@example.test';
   await clearLimits();
+  const closingSignIn = browser();
+  const closingSignInEmail = 'pending-login-close@example.test';
+  assert.equal((await closingSignIn.post('/account/login-code', { email: closingSignInEmail })).status, 202);
+  const [, closingSignInCode] = await mail(closingSignInEmail, /^(\d{6})$/m);
   assert.equal((await closing.post('/account/register', { email: closingEmail })).status, 202);
   const [, closingCode] = await mail(closingEmail, /^(\d{6})$/m);
   assert.equal((await owner.post('/admin/api/registration', { policy: 'closed' })).body.registration, 'closed');
   assert.equal((await closing.get('/account/config')).body.registrationAvailable, false);
   assert.equal((await closing.post('/account/resend')).body.error, 'registration_unavailable');
   assert.equal((await closing.post('/account/verify', { email: closingEmail, code: closingCode })).body.error, 'registration_unavailable');
+  assert.equal((await closingSignIn.post('/account/login-verify', { code: closingSignInCode })).body.error, 'registration_unavailable');
+  await assert.rejects(getAccount(pool, closingSignInEmail), /Account does not exist/);
   assert.equal((await browser().post('/account/register', { email: closingEmail })).body.error, 'registration_unavailable');
   assert.equal((await browser().post('/account/login', { email: ownerEmail, password: ownerPassword })).status, 204);
+  const closedExisting = browser();
+  const closedExistingMail = inbox.length;
+  assert.equal((await closedExisting.post('/account/login-code', { email: ownerEmail })).status, 202);
+  const [, closedExistingCode] = await mail(ownerEmail, /^(\d{6})$/m, closedExistingMail);
+  assert.equal((await closedExisting.post('/account/login-verify', { code: closedExistingCode })).status, 204);
   assert.equal((await owner.post('/admin/api/registration', { policy: 'open' })).status, 200);
   assert.equal((await closing.get('/account/config')).body.registrationAvailable, true);
   assert.equal((await closing.get('/account/session')).status, 401);

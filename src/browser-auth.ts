@@ -34,6 +34,7 @@ export type AccountServices = {
 
 const verificationCode = () => String(randomInt(1_000_000)).padStart(6, '0');
 const codeKey = (enrollment: string, code: string) => digest(`${enrollment}\0${code}`);
+const invitationKey = (invitation?: string) => invitation && /^[\w-]{43}$/.test(invitation) ? digest(`invite:${invitation}`) : null;
 const passwordFailure = (error: unknown) => error instanceof PasswordRejected ? error.code : 'invalid_password';
 
 export async function registerBrowserAuth(app: FastifyInstance, services: AccountServices) {
@@ -96,7 +97,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     if (allowedDomain && email.split('@')[1] !== allowedDomain) return failure(reply, 400, 'registration_domain');
     if (!await loginRateAllowed(pool, request.ip, email, 'register', 5)) return failure(reply, 429, 'try_later');
     const invitation = withPassword?.[2] ?? withCode?.[1];
-    const invitationDigest = invitation && /^[\w-]{43}$/.test(invitation) ? digest(`invite:${invitation}`) : null;
+    const invitationDigest = invitationKey(invitation);
     const refused = await registrationRefusal(pool, email, invitationDigest);
     if (refused) return failure(reply, 403, refused);
     const rawPassword = withPassword?.[1];
@@ -539,9 +540,15 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     web.keyFor(interaction ? enrollment + '\0' + interaction : enrollment);
   const passwordlessAvailable = async () => !testenvSignup && await mailer.codes();
 
+  function codeSignupRefusal(email: string) {
+    if (!registrationEnabled || testenvSignup) return 'registration_unavailable';
+    if (allowedDomain && email.split('@')[1] !== allowedDomain) return 'registration_domain';
+  }
+
   async function requestLoginCode(request: FastifyRequest, reply: FastifyReply, interaction?: string) {
+    const [address, invitation] = fields(request, 'email', 'invitation') ?? fields(request, 'email') ?? [];
     let email: string;
-    try { email = mailAddress(fields(request, 'email')?.[0] ?? ''); }
+    try { email = mailAddress(address ?? ''); }
     catch { return failure(reply, 400, 'invalid_email'); }
     if (!(interaction ? await passwordlessAvailable() : await mailer.codes())) return failure(reply, 503, 'delivery_unavailable');
     if (!await loginRateAllowed(pool, request.ip, email, 'login-code', 5)) return failure(reply, 429, 'try_later');
@@ -555,14 +562,16 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     const language = mailLanguage(request);
     mailer.later(async () => {
       const account = await getLogin(pool, email);
-      if (account?.enabled) await mailer.sendCode(email, code, language);
+      if (account ? account.enabled : !codeSignupRefusal(email) && !await registrationRefusal(pool, email, invitationKey(invitation))) {
+        await mailer.sendCode(email, code, language);
+      }
     });
     setBrowserCookie(reply, loginCodeCookie, enrollment, loginCodeSeconds);
     return reply.code(202).send({ accepted: true });
   }
 
   async function verifyLoginCode(request: FastifyRequest, reply: FastifyReply, interaction?: string) {
-    const [code] = fields(request, 'code') ?? [];
+    const [code, invitation] = fields(request, 'code', 'invitation') ?? fields(request, 'code') ?? [];
     const enrollment = readBrowserCookie(request, loginCodeCookie);
     if (!enrollment || !code || !/^\d{6}$/.test(code)) {
       await failure(reply, 400, 'invalid_code');
@@ -573,13 +582,29 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       return undefined;
     }
     const enrollmentKey = loginCodeKey(enrollment, interaction);
-    const result = await transaction(pool, async (db) => {
+    type Outcome = { id: string; epoch: number; token: string } | { error: string };
+    const result = await transaction<Outcome | undefined>(pool, async (db) => {
       const row = (await db.query<{ email: string }>(
         `DELETE FROM login_codes WHERE token_digest = $1 AND enrollment_digest = $2 AND expires_at > now() AND attempts < $3 RETURNING email`,
         [codeKey(enrollment, code), enrollmentKey, codeAttempts])).rows[0];
       if (!row) return undefined;
-      const account = (await db.query<{ id: string; security_epoch: number; enabled: boolean }>(
+      const findAccount = async () => (await db.query<{ id: string; security_epoch: number; enabled: boolean }>(
         'SELECT id, security_epoch, enabled FROM accounts WHERE email = $1 FOR UPDATE', [row.email])).rows[0];
+      let account = await findAccount();
+      if (!account) {
+        const refused = codeSignupRefusal(row.email);
+        if (refused) return { error: refused };
+        const registered = await registerNewAccount(db, row.email, null, true, invitationKey(invitation));
+        if (registered.id) {
+          await audit(db, 'account.email_registered', registered.id, registered.id);
+          account = { id: registered.id, security_epoch: 0, enabled: true };
+        } else if (registered.error === 'email_in_use') {
+          // Another request may have registered this address while this code was being checked.
+          account = await findAccount();
+        } else {
+          return { error: registered.error };
+        }
+      }
       if (!account?.enabled) return undefined;
       await audit(db, 'account.signed_in', account.id, account.id, 'code');
       return { id: account.id, epoch: account.security_epoch, token: await web.issue(db, account.id, account.security_epoch, request) };
@@ -590,6 +615,10 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       return undefined;
     }
     setBrowserCookie(reply, loginCodeCookie, '', 0);
+    if ('error' in result) {
+      await failure(reply, 403, result.error);
+      return undefined;
+    }
     return result;
   }
 

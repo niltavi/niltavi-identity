@@ -65,7 +65,9 @@ export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}
   const pwBusy = useRef(false);
   const passwordless = interaction?.passwordless ?? settings?.passwordlessAvailable;
   const mode = passwordless ? chosenMode : 'password';
-  const register = (interaction ? interaction.registration : settings?.registrationAvailable) &&
+  const invitation = interaction ? undefined : pendingInvitation();
+  const codeFields = invitation ? { invitation } : {};
+  const register = mode === 'password' && (interaction ? interaction.registration : settings?.registrationAvailable) &&
     <PageLink to={{ section: 'register' }}>{t('Create an account', '注册')}</PageLink>;
 
   function switchMode() {
@@ -97,7 +99,7 @@ export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}
   function verifyCode(code: string) {
     setCodeError(undefined);
     void task.run('verify', async () => {
-      try { await submit('/account/login-verify', { code: code.trim() }); }
+      try { await submit('/account/login-verify', { code: code.trim(), ...codeFields }); }
       catch (failure) {
         if (codeOf(failure) !== 'invalid_code') throw failure;
         setCodeError(problem(failure, language));
@@ -151,7 +153,7 @@ export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}
         setEmailError(undefined);
         void task.run('send-code', async () => {
           try {
-            await submit('/account/login-code', { email });
+            await submit('/account/login-code', { email, ...codeFields });
             setCodeSentTo(email);
           } catch (failure) {
             if (codeOf(failure) === 'invalid_email') setEmailError(problem(failure, language));
@@ -178,7 +180,7 @@ export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}
         <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)}
           onComplete={verifyCode} />
         <CodeHelp error={codeError} onResend={() => void task.run('resend', () =>
-          submit('/account/login-code', { email: codeSentTo! }))} isPending={task.pending === 'resend'} />
+          submit('/account/login-code', { email: codeSentTo!, ...codeFields }))} isPending={task.pending === 'resend'} />
         <Button type="submit" className="w-full" isPending={task.pending === 'verify'}>{t('Sign in', '登录')}</Button>
       </Form>}
     </div>
@@ -200,10 +202,8 @@ export function Register({ interactionPath }: { interactionPath?: string } = {})
   const [verifying, setVerifying] = useState<string>();
   const [invited, setInvited] = useState<Invitation | null>();
   const [codeError, setCodeError] = useState<string>();
-  const [emailError, setEmailError] = useState<string>();
   const invitation = pendingInvitation();
   const mode = settings?.registrationMode;
-  const passwordless = settings?.passwordlessAvailable;
   const registerPath = interactionPath ? interactionPath + '/register' : '/account/register';
   const enrollmentPath = interactionPath ? registerPath + '/enrollment' : '/account/enrollment';
   const verifyPath = interactionPath ? registerPath : '/account/verify';
@@ -314,45 +314,6 @@ export function Register({ interactionPath }: { interactionPath?: string } = {})
         </Form>
         <p className="nt-auth__links nt-auth__foot">{signIn}</p>
       </div>
-    </div>;
-  }
-
-  if (passwordless) {
-    return <div className="nt-auth nt-fade-up">
-      <div className="nt-auth__head"><h3>{t('Create an account', '创建账号')}</h3></div>
-      {invited && <p className="text-sm text-muted wrap-anywhere">{t(`${invited.inviter} invited ${invited.email} to join ${invited.team}.`,
-        `${invited.inviter} 邀请 ${invited.email} 加入 ${invited.team}。`)}</p>}
-      {settings.registrationDomain && <p className="text-sm text-muted">{t(`Use an address at @${settings.registrationDomain}.`, `请使用 @${settings.registrationDomain} 的邮箱。`)}</p>}
-      <TaskFeedback task={task} />
-      <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => {
-        const email = readForm(event)('email').trim();
-        setEmailError(undefined);
-        void task.run('register', async () => {
-          try {
-            const result = await request<{ created?: true; continueTo?: string }>(registerPath,
-              { email, ...(invited && invitation ? { invitation } : {}) });
-            if (result.created) await finish(result.continueTo);
-            else setVerifying(email);
-          } catch (failure) {
-            const code = codeOf(failure);
-            if (code === 'invalid_email' || code === 'registration_domain' || code === 'email_in_use' || code === 'invitation_required') {
-              setEmailError(problem(failure, language));
-            } else throw failure;
-          }
-        });
-      }}>
-        <TextField name="email" type="email" autoComplete="email" isRequired {...(invited?.email ? { defaultValue: invited.email } : {})}
-          isInvalid={Boolean(emailError)} onChange={() => setEmailError(undefined)}>
-          <Label>{t('Email', '邮箱')}</Label>
-          <InputGroup>
-            <InputGroup.Prefix><Envelope aria-hidden="true" width={14} height={14} /></InputGroup.Prefix>
-            <InputGroup.Input placeholder="you@example.com" />
-          </InputGroup>
-          {emailError && <FieldError>{emailError}</FieldError>}
-        </TextField>
-        <Button type="submit" className="w-full" isPending={task.pending === 'register'}>{t('Send verification code', '发送验证码')}</Button>
-      </Form>
-      <p className="nt-auth__links nt-auth__foot">{signIn}</p>
     </div>;
   }
 
@@ -611,10 +572,13 @@ export function Invite() {
   if (!account) {
     return <Narrow title={title}>
       {summary}
-      <p className="text-sm text-muted">{t('Sign in or create an account with that email address to accept.', '请使用该邮箱登录或创建账号后接受邀请。')}</p>
+      <p className="text-sm text-muted">{settings?.passwordlessAvailable
+        ? t('Use a code sent to that email address to accept.', '请使用该邮箱接收验证码并接受邀请。')
+        : t('Sign in or create an account with that email address to accept.', '请使用该邮箱登录或创建账号后接受邀请。')}</p>
       <div className="grid gap-2">
         <Button className="w-full" onPress={() => navigate({ language, section: 'login' })}>{t('Sign in', '登录')}</Button>
-        {settings?.registrationAvailable && <Button className="w-full" variant="secondary" onPress={() => navigate({ language, section: 'register' })}>{t('Create an account', '创建账号')}</Button>}
+        {settings?.registrationAvailable && !settings.passwordlessAvailable &&
+          <Button className="w-full" variant="secondary" onPress={() => navigate({ language, section: 'register' })}>{t('Create an account', '创建账号')}</Button>}
       </div>
     </Narrow>;
   }
