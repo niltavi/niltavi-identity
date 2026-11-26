@@ -527,12 +527,15 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
 
   const loginCodeCookie = '__Host-niltavi-login-code';
   const loginCodeSeconds = 900;
+  const loginCodeKey = (enrollment: string, interaction?: string) =>
+    web.keyFor(interaction ? enrollment + '\0' + interaction : enrollment);
+  const passwordlessAvailable = async () => !testenvSignup && await mailer.codes();
 
-  app.post('/account/login-code', guard, async (request, reply) => {
+  async function requestLoginCode(request: FastifyRequest, reply: FastifyReply, interaction?: string) {
     let email: string;
     try { email = mailAddress(fields(request, 'email')?.[0] ?? ''); }
     catch { return failure(reply, 400, 'invalid_email'); }
-    if (!await mailer.codes()) return failure(reply, 503, 'delivery_unavailable');
+    if (!(interaction ? await passwordlessAvailable() : await mailer.codes())) return failure(reply, 503, 'delivery_unavailable');
     if (!await loginRateAllowed(pool, request.ip, email, 'login-code', 5)) return failure(reply, 429, 'try_later');
     const enrollment = randomBytes(32).toString('base64url');
     const code = verificationCode();
@@ -540,7 +543,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     await pool.query(`INSERT INTO login_codes (token_digest, email, enrollment_digest, expires_at, next_resend_at)
       VALUES ($1, $2, $3, now() + $4 * interval '1 second', now() + $5 * interval '1 second')
       ON CONFLICT (enrollment_digest) DO NOTHING`,
-    [codeKey(enrollment, code), email, web.keyFor(enrollment), loginCodeSeconds, resendSeconds]);
+    [codeKey(enrollment, code), email, loginCodeKey(enrollment, interaction), loginCodeSeconds, resendSeconds]);
     const language = mailLanguage(request);
     mailer.later(async () => {
       const account = await getLogin(pool, email);
@@ -548,29 +551,44 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     });
     setBrowserCookie(reply, loginCodeCookie, enrollment, loginCodeSeconds);
     return reply.code(202).send({ accepted: true });
-  });
+  }
 
-  app.post('/account/login-verify', guard, async (request, reply) => {
+  async function verifyLoginCode(request: FastifyRequest, reply: FastifyReply, interaction?: string) {
     const [code] = fields(request, 'code') ?? [];
     const enrollment = readBrowserCookie(request, loginCodeCookie);
-    if (!enrollment || !code || !/^\d{6}$/.test(code)) return failure(reply, 400, 'invalid_code');
-    if (!await rateAllowed(pool, [[`login-code-verify:source:${request.ip}`, 20]])) return failure(reply, 429, 'try_later');
+    if (!enrollment || !code || !/^\d{6}$/.test(code)) {
+      await failure(reply, 400, 'invalid_code');
+      return undefined;
+    }
+    if (!await rateAllowed(pool, [[`login-code-verify:source:${request.ip}`, 20]])) {
+      await failure(reply, 429, 'try_later');
+      return undefined;
+    }
+    const enrollmentKey = loginCodeKey(enrollment, interaction);
     const result = await transaction(pool, async (db) => {
       const row = (await db.query<{ email: string }>(
         `DELETE FROM login_codes WHERE token_digest = $1 AND enrollment_digest = $2 AND expires_at > now() AND attempts < $3 RETURNING email`,
-        [codeKey(enrollment, code), web.keyFor(enrollment), codeAttempts])).rows[0];
+        [codeKey(enrollment, code), enrollmentKey, codeAttempts])).rows[0];
       if (!row) return undefined;
       const account = (await db.query<{ id: string; security_epoch: number; enabled: boolean }>(
         'SELECT id, security_epoch, enabled FROM accounts WHERE email = $1 FOR UPDATE', [row.email])).rows[0];
       if (!account?.enabled) return undefined;
       await audit(db, 'account.signed_in', account.id, account.id, 'code');
-      return { id: account.id, token: await web.issue(db, account.id, account.security_epoch, request) };
+      return { id: account.id, epoch: account.security_epoch, token: await web.issue(db, account.id, account.security_epoch, request) };
     });
     if (!result) {
-      await pool.query('UPDATE login_codes SET attempts = attempts + 1 WHERE enrollment_digest = $1', [web.keyFor(enrollment)]);
-      return failure(reply, 400, 'invalid_code');
+      await pool.query('UPDATE login_codes SET attempts = attempts + 1 WHERE enrollment_digest = $1', [enrollmentKey]);
+      await failure(reply, 400, 'invalid_code');
+      return undefined;
     }
     setBrowserCookie(reply, loginCodeCookie, '', 0);
+    return result;
+  }
+
+  app.post('/account/login-code', guard, (request, reply) => requestLoginCode(request, reply));
+  app.post('/account/login-verify', guard, async (request, reply) => {
+    const result = await verifyLoginCode(request, reply);
+    if (!result) return reply;
     web.grant(reply, result.token);
     return reply.code(204).send();
   });
@@ -729,4 +747,5 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       return result ? { enabled: result.enabled, changed: result.changed } : failure(reply, 403, 'account_not_managed');
     });
   }
+  return { requestLoginCode, verifyLoginCode, passwordlessAvailable };
 }

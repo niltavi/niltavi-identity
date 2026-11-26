@@ -1,18 +1,20 @@
-import { Alert, Button, Form, InputGroup, Label, Link, TextField, buttonVariants } from '@heroui/react';
-import Envelope from '@gravity-ui/icons/Envelope';
-import Lock from '@gravity-ui/icons/Lock';
+import { Button, Link, buttonVariants } from '@heroui/react';
 import { useLayoutEffect, useState } from 'react';
+import { call } from './api';
+import type { Account } from './api';
+import { SignIn } from './auth';
 import { BrandFooter, BrandHeader, container, pathFor } from './site';
 import type { Language } from './site';
-import { AuthLayout } from './ui';
+import { AppContext, AuthLayout } from './ui';
 
 export type ProtocolView = 'login' | 'logout' | 'signed-out' | 'expired';
 export type ProtocolData = {
-  view: ProtocolView; invalid: boolean; throttled: boolean; registration?: string | undefined; recover: boolean;
+  view: ProtocolView; invalid: boolean; throttled: boolean; registration?: string | undefined; passwordless: boolean;
   language: Language; appName?: string | undefined; appUrl?: string | undefined;
   signInName?: string | undefined; signInLogoUrl?: string | undefined;
 };
 const languageKey = 'identity.protocol-language';
+const refreshAccount = () => call<{ account: Account }>('/account/session').then(result => result.account, () => null);
 
 function chosenLanguage(fallback: Language): Language {
   try {
@@ -26,7 +28,6 @@ function chosenLanguage(fallback: Language): Language {
 export function ProtocolPage({ data }: { data: ProtocolData }) {
   const { view, appName, appUrl } = data;
   const [language, setLanguage] = useState(() => chosenLanguage(data.language));
-  const [sending, setSending] = useState(false);
   const t = (en: string, zh: string) => language === 'en' ? en : zh;
   const title = view === 'login' ? t('Sign in', '登录')
     : view === 'logout' ? t('Sign out of all Niltavi apps in this browser', '退出这个浏览器上的所有 Niltavi 应用')
@@ -40,39 +41,15 @@ export function ProtocolPage({ data }: { data: ProtocolData }) {
     try { window.sessionStorage.setItem(languageKey, next); } catch { /* the choice lasts for this page only */ }
     setLanguage(next);
   }
-  const problem = data.throttled ? t('Too many attempts. Try again later.', '尝试次数过多，请稍后再试。')
-    : data.invalid ? t('The email or password is incorrect.', '邮箱或密码不正确。') : undefined;
-
   const header = <BrandHeader route={{ language, section: 'login' }} onLanguage={choose} />;
   if (view === 'login') {
     return <div className="flex min-h-svh flex-col bg-background text-foreground">
       <AuthLayout brand={{ name: data.signInName, logoUrl: data.signInLogoUrl, logoAlt: appName }} controls={header}>
-        <div className="nt-auth nt-auth--signin">
-          <h1 className="nt-auth__title">{title}</h1>
-          {problem && <Alert status="danger" role="alert"><Alert.Indicator /><Alert.Content><Alert.Title>{problem}</Alert.Title></Alert.Content></Alert>}
-          <Form method="post" action={window.location.pathname} validationBehavior="native" className="nt-auth__form"
-            onSubmit={() => setSending(true)}>
-            <TextField name="email" type="email" isRequired autoComplete="username">
-              <Label>{t('Email', '邮箱')}</Label>
-              <InputGroup>
-                <InputGroup.Prefix><Envelope aria-hidden="true" width={14} height={14} /></InputGroup.Prefix>
-                <InputGroup.Input placeholder="you@example.com" />
-              </InputGroup>
-            </TextField>
-            <TextField name="password" type="password" isRequired autoComplete="current-password">
-              <Label>{t('Password', '密码')}</Label>
-              <InputGroup>
-                <InputGroup.Prefix><Lock aria-hidden="true" width={14} height={14} /></InputGroup.Prefix>
-                <InputGroup.Input />
-              </InputGroup>
-            </TextField>
-            <Button type="submit" className="w-full" isPending={sending}>{t('Sign in', '登录')}</Button>
-          </Form>
-          {(data.registration || data.recover) && <div className="nt-auth__links flex-wrap">
-            {data.registration && <Link href={data.registration}>{t('Create an account', '创建账号')}</Link>}
-            {data.recover && <Link href={pathFor({ language, section: 'recover' })}>{t('Forgot password', '忘记密码')}</Link>}
-          </div>}
-        </div>
+        <AppContext.Provider value={{ language, t, settings: undefined, account: undefined,
+          navigate: route => window.location.assign(pathFor(route)), refresh: refreshAccount }}>
+          <SignIn interaction={{ path: window.location.pathname, passwordless: data.passwordless, registration: data.registration,
+            initialError: data.throttled ? 'try_later' : data.invalid ? 'invalid_credentials' : undefined }} />
+        </AppContext.Provider>
       </AuthLayout>
     </div>;
   }

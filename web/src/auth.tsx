@@ -44,10 +44,18 @@ function Lines() {
   </div>;
 }
 
-export function SignIn() {
+type SignInInteraction = {
+  path: string;
+  passwordless: boolean;
+  registration: string | undefined;
+  initialError: string | undefined;
+};
+
+export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}) {
   const { t, language, settings, refresh } = useApp();
   const task = useTask();
-  const [mode, setMode] = useState<'password' | 'code'>('code');
+  const [chosenMode, setMode] = useState<'password' | 'code'>(interaction?.initialError ? 'password' : 'code');
+  const [initialError, setInitialError] = useState(interaction?.initialError);
   const [codeSentTo, setCodeSentTo] = useState<string>();
   const [codeError, setCodeError] = useState<string>();
   const [emailError, setEmailError] = useState<string>();
@@ -55,7 +63,11 @@ export function SignIn() {
   const [pwMessage, setPwMessage] = useState<string>();
   const [pwPending, setPwPending] = useState(false);
   const pwBusy = useRef(false);
-  const passwordless = settings?.passwordlessAvailable;
+  const passwordless = interaction?.passwordless ?? settings?.passwordlessAvailable;
+  const mode = passwordless ? chosenMode : 'password';
+  const register = interaction
+    ? interaction.registration && <Link href={interaction.registration}>{t('Create an account', '注册')}</Link>
+    : settings?.registrationAvailable && <PageLink to={{ section: 'register' }}>{t('Create an account', '注册')}</PageLink>;
 
   function switchMode() {
     setMode(m => m === 'code' ? 'password' : 'code');
@@ -64,13 +76,43 @@ export function SignIn() {
     setEmailError(undefined);
     setPwEmailError(undefined);
     setPwMessage(undefined);
+    setInitialError(undefined);
     task.setError(undefined);
+  }
+
+  async function submit(path: string, values: Record<string, string>) {
+    if (!interaction) {
+      await call(path, values);
+      if (path !== '/account/login-code') await refresh();
+      return;
+    }
+    try {
+      const { continueTo } = await call<{ continueTo?: string }>(interaction.path, values);
+      if (continueTo) window.location.assign(continueTo);
+    } catch (failure) {
+      if (codeOf(failure) === 'interaction_expired') window.location.reload();
+      throw failure;
+    }
+  }
+
+  function verifyCode(code: string) {
+    setCodeError(undefined);
+    void task.run('verify', async () => {
+      try { await submit('/account/login-verify', { code: code.trim() }); }
+      catch (failure) {
+        if (codeOf(failure) !== 'invalid_code') throw failure;
+        setCodeError(problem(failure, language));
+      }
+    });
   }
 
   const step = mode === 'password' ? 'password' : codeSentTo ? 'verify' : 'email';
 
+  if (!interaction && !settings) return <Lines />;
+
   return <div className="nt-auth nt-auth--signin nt-fade-up">
-    <h3 className="nt-auth__title">{t('Sign in', '登录')}</h3>
+    <h1 className="nt-auth__title">{t('Sign in', '登录')}</h1>
+    {initialError && <Notice status="danger">{problem(initialError, language)}</Notice>}
     {mode === 'code' && <TaskFeedback task={task} />}
     <div key={step} className="nt-fade-up">
       {step === 'password' && <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => {
@@ -78,12 +120,12 @@ export function SignIn() {
         if (pwBusy.current) return;
         pwBusy.current = true;
         setPwPending(true);
+        setInitialError(undefined);
         setPwEmailError(undefined);
         setPwMessage(undefined);
         void (async () => {
           try {
-            await call('/account/login', { email: field('email').trim(), password: field('password') });
-            await refresh();
+            await submit('/account/login', { email: field('email').trim(), password: field('password') });
           } catch (failure) {
             if (codeOf(failure) === 'invalid_email') setPwEmailError(problem(failure, language));
             else setPwMessage(problem(failure, language));
@@ -110,7 +152,7 @@ export function SignIn() {
         setEmailError(undefined);
         void task.run('send-code', async () => {
           try {
-            await call('/account/login-code', { email });
+            await submit('/account/login-code', { email });
             setCodeSentTo(email);
           } catch (failure) {
             if (codeOf(failure) === 'invalid_email') setEmailError(problem(failure, language));
@@ -128,52 +170,25 @@ export function SignIn() {
         </TextField>
         <Button type="submit" className="w-full" isPending={task.pending === 'send-code'}>{t('Send code', '获取验证码')}</Button>
       </Form>}
-      {step === 'verify' && <>
-        <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => {
-          event.preventDefault();
-        }}>
-          <SentTo label={t('Code sent to', '验证码已发送至')} value={codeSentTo!} onEdit={() => { setCodeSentTo(undefined); setCodeError(undefined); task.setError(undefined); }} />
-          <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)}
-            onComplete={code => {
-              setCodeError(undefined);
-              void task.run('verify', async () => {
-                try {
-                  await call('/account/login-verify', { code: code.trim() });
-                  await refresh();
-                } catch (failure) {
-                  if (codeOf(failure) !== 'invalid_code') throw failure;
-                  setCodeError(problem(failure, language));
-                }
-              });
-            }} />
-          <CodeHelp error={codeError} onResend={() => void task.run('resend', async () => {
-            await call('/account/login-code', { email: codeSentTo! });
-          })} isPending={task.pending === 'resend'} />
-          <Button type="button" className="w-full" isPending={task.pending === 'verify'} onPress={() => {
-            const input = document.querySelector<HTMLInputElement>('.nt-auth__otp input');
-            const code = input?.value ?? '';
-            if (code.length < 6) return;
-            setCodeError(undefined);
-            void task.run('verify', async () => {
-              try {
-                await call('/account/login-verify', { code: code.trim() });
-                await refresh();
-              } catch (failure) {
-                if (codeOf(failure) !== 'invalid_code') throw failure;
-                setCodeError(problem(failure, language));
-              }
-            });
-          }}>{t('Sign in', '登录')}</Button>
-        </Form>
-      </>}
+      {step === 'verify' && <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => {
+        event.preventDefault();
+        const code = event.currentTarget.querySelector<HTMLInputElement>('.nt-auth__otp input')?.value;
+        if (code?.length === 6) verifyCode(code);
+      }}>
+        <SentTo label={t('Code sent to', '验证码已发送至')} value={codeSentTo!} onEdit={() => { setCodeSentTo(undefined); setCodeError(undefined); task.setError(undefined); }} />
+        <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)}
+          onComplete={verifyCode} />
+        <CodeHelp error={codeError} onResend={() => void task.run('resend', () =>
+          submit('/account/login-code', { email: codeSentTo! }))} isPending={task.pending === 'resend'} />
+        <Button type="submit" className="w-full" isPending={task.pending === 'verify'}>{t('Sign in', '登录')}</Button>
+      </Form>}
     </div>
     <div className="nt-auth__alt">
       <p className="nt-auth__links">
         {passwordless && <Link href="#" onClick={event => { event.preventDefault(); switchMode(); }}>{mode === 'code' ? t('Use password', '使用密码登录') : t('Use a code', '使用验证码登录')}</Link>}
-        {mode === 'password' && <><span aria-hidden="true">·</span><PageLink to={{ section: 'recover' }}>{t('Forgot password?', '忘记密码')}</PageLink></>}
+        {mode === 'password' && <>{passwordless && <span aria-hidden="true">·</span>}<PageLink to={{ section: 'recover' }}>{t('Forgot password?', '忘记密码')}</PageLink></>}
       </p>
-      {settings?.registrationAvailable && <p className="nt-auth__links">{t('New here?', '还没有账号？')}<PageLink to={{ section: 'register' }}>{t('Create an account', '注册')}</PageLink></p>}
-      {!passwordless && <p className="nt-auth__links"><PageLink to={{ section: 'recover' }}>{t('Forgot password?', '忘记密码')}</PageLink></p>}
+      {register && <p className="nt-auth__links">{t('New here?', '还没有账号？')}{register}</p>}
     </div>
   </div>;
 }

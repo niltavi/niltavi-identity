@@ -355,6 +355,7 @@ try {
   assert.match(loginPage.text, /data-sign-in-name="Brand One &amp; Co"/);
   assert.match(loginPage.text, /data-sign-in-logo-url="https:\/\/assets\.example\.test\/one\.svg"/);
   assert.match(loginPage.text, /data-language="zh-CN"/);
+  assert.doesNotMatch(loginPage.text, /data-passwordless=/);
   const unbranded = flow(two);
   assert.doesNotMatch((await unbranded.follow(await unbranded.start())).text, /data-sign-in-(name|logo-url)=/);
   passed('only an application with configured sign-in branding supplies it to its OIDC sign-in page');
@@ -364,6 +365,8 @@ try {
   assert.equal(wrong.status, 401);
   assert.equal(missing.status, 401);
   assert.equal(wrong.text, missing.text, 'A wrong password and an unknown address get the same page');
+  assert.deepEqual((await first.session.post(interaction, { email: memberEmail, password: 'not the password' })).body,
+    { error: 'invalid_credentials' });
   const signedIn = await first.follow(await first.session.form(interaction, { email: memberEmail, password: newPassword }));
   assert.ok(signedIn.location.startsWith(one.callback), 'Sign-in returns straight to the application');
   const tokens = (await first.tokens(signedIn.location)).body;
@@ -605,6 +608,24 @@ try {
   const config = (await http('GET', '/account/config')).body;
   assert.deepEqual([config.registrationMode, config.recoveryAvailable], ['verify-email', true]);
   passed('outgoing mail is saved only after the owner confirms the code from a real test message');
+
+  const otp = flow(one, browser(), { prompt: 'login' });
+  const started = await otp.start();
+  const loginPath = new URL(started.location, issuer).pathname;
+  assert.match((await otp.follow(started)).text, /data-passwordless="true"/);
+  const mailStart = inbox.length;
+  assert.equal((await otp.session.post(loginPath, { email: memberEmail })).status, 202);
+  const [, loginCode] = await mail(memberEmail, /^(\d{6})$/m, mailStart);
+  assert.equal((await browser().post(loginPath, { code: loginCode })).body.error, 'interaction_expired');
+  assert.equal((await otp.session.post('/account/login-verify', { code: loginCode })).body.error, 'invalid_code');
+  const verifiedLogin = await otp.session.post(loginPath, { code: loginCode });
+  assert.equal(verifiedLogin.status, 200);
+  assert.match(verifiedLogin.body.continueTo, /^\/auth\//);
+  const returnedToApp = await otp.follow(await otp.session.get(verifiedLogin.body.continueTo));
+  assert.ok(returnedToApp.location.startsWith(one.callback));
+  assert.equal(decodeJwt((await otp.tokens(returnedToApp.location)).body.id_token).sub, memberId);
+  assert.equal((await otp.session.get('/account/session')).body.account.id, memberId);
+  passed('sign-in with an email code completes the original app request and opens an Identity session');
 
   // Registration answers the same for a new and an existing address.
   const timed = async (email) => {

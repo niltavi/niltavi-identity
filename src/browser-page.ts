@@ -17,6 +17,7 @@ export type ProtocolOptions = {
   invalid?: boolean; throttled?: boolean; form?: string; registration?: string | undefined; recover?: string | undefined;
   language?: 'en' | 'zh-CN'; appName?: string | undefined; appUrl?: string | undefined;
   signInName?: string | undefined; signInLogoUrl?: string | undefined;
+  passwordless?: boolean;
 };
 export const pageSections = ['home', 'login', 'register', 'workspace', 'recover', 'reset', 'verify-email', 'invite', 'setup', 'admin'] as const;
 const attribute = (value: string) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -66,6 +67,7 @@ export async function registerBrowserPage(app: FastifyInstance, issuer: URL) {
       registration: options.registration, recover: options.recover, language: options.language ?? 'en',
       'app-name': options.appName, 'app-url': options.appUrl,
       'sign-in-name': options.signInName, 'sign-in-logo-url': options.signInLogoUrl,
+      passwordless: options.passwordless ? 'true' : undefined,
     }).flatMap(([name, value]) => value === undefined ? [] : [` data-${name}="${attribute(value)}"`]).join('');
     return page.replace('<html lang="en">', () => `<html lang="${options.language ?? 'en'}">`)
       .replace(mount, () => `${options.form ? `<div hidden>${options.form}</div>` : ''}<div id="root"${data}></div>`);
