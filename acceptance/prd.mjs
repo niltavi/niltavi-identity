@@ -324,6 +324,11 @@ try {
   const one = { ...(await owner.post('/admin/api/applications', registration)).body, callback: 'https://app-one.localhost:43921/auth/callback' };
   const two = { ...(await owner.post('/admin/api/applications', { id: 'app-two', name: 'App Two', homeUrl: 'https://app-two.localhost:43922/' })).body,
     callback: 'https://app-two.localhost:43922/auth/callback' };
+  const brandingPath = `/admin/api/applications/${one.client_id}/branding`;
+  const branding = { signInName: 'Brand One & Co', signInLogoUrl: 'https://assets.example.test/one.svg' };
+  assert.equal((await unverified.post(brandingPath, branding)).body.error, 'second_factor_required');
+  assert.equal((await owner.post(brandingPath, { ...branding, signInLogoUrl: 'http://assets.example.test/one.svg' })).status, 400);
+  assert.equal((await owner.post(brandingPath, branding)).status, 200);
   secret(one.client_secret);
   secret(two.client_secret);
   assert.equal((await http('GET', '/apps/self', { headers: basic(one.client_id, one.client_secret) })).body.name, 'App One');
@@ -347,7 +352,12 @@ try {
   const loginPage = await first.follow(await first.start());
   assert.equal(loginPage.status, 200);
   assert.match(loginPage.text, /data-app-name="App One"/);
+  assert.match(loginPage.text, /data-sign-in-name="Brand One &amp; Co"/);
+  assert.match(loginPage.text, /data-sign-in-logo-url="https:\/\/assets\.example\.test\/one\.svg"/);
   assert.match(loginPage.text, /data-language="zh-CN"/);
+  const unbranded = flow(two);
+  assert.doesNotMatch((await unbranded.follow(await unbranded.start())).text, /data-sign-in-(name|logo-url)=/);
+  passed('only an application with configured sign-in branding supplies it to its OIDC sign-in page');
   const interaction = loginPage.text.match(/data-registration="(\/interaction\/[\w-]+)\/register"/)[1];
   const wrong = await first.session.form(interaction, { email: memberEmail, password: 'not the password' });
   const missing = await first.session.form(interaction, { email: 'nobody@example.test', password: 'not the password' });

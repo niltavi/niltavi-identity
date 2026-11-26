@@ -40,12 +40,14 @@ function page(title: string, markup: string, language: Language = 'en') {
 }
 
 // Plain pages for a build without the browser bundle. They carry the same facts as the shared UI.
-function plainPage(view: ProtocolView, { invalid, form, registration, recover, language = 'en', appName, appUrl }: ProtocolOptions) {
+function plainPage(view: ProtocolView, { invalid, form, registration, recover, language = 'en', appName, appUrl, signInName, signInLogoUrl }: ProtocolOptions) {
   const text = (en: string, zh: string) => language === 'en' ? en : zh;
   const app = appName ? escape(appName) : undefined;
   if (view === 'login') {
-    return page(app ? text(`Sign in to continue to ${appName}`, `登录以继续使用 ${appName}`) : text('Sign in to Niltavi Identity', '登录 Niltavi Identity'),
-      `${invalid ? `<p>${text('Credentials were not accepted.', '邮箱或密码不正确。')}</p>` : ''}
+    return page(text('Sign in', '登录'),
+      `${signInLogoUrl ? `<img src="${escape(signInLogoUrl)}" alt="${signInName ? '' : app ?? ''}" width="40" height="40" referrerpolicy="no-referrer">` : ''}
+      ${signInName ? `<p>${escape(signInName)}</p>` : ''}
+      ${invalid ? `<p>${text('Credentials were not accepted.', '邮箱或密码不正确。')}</p>` : ''}
       <form method="post"><p><label>${text('Email', '邮箱')} <input type="email" name="email" required autocomplete="username"></label></p>
       <p><label>${text('Password', '密码')} <input type="password" name="password" required autocomplete="current-password"></label></p>
       <button type="submit">${text('Sign in', '登录')}</button></form>
@@ -161,13 +163,18 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     const canRegister = registrationEnabled && validInteractionUid(details.uid) && await registrationPolicy(pool) !== 'closed';
     return {
       language, appName: requester?.name, appUrl: requester?.home_url, recover: localPath(language, '/recover'),
+      signInName: requester?.sign_in_name ?? undefined, signInLogoUrl: requester?.sign_in_logo_url ?? undefined,
       registration: canRegister ? '/interaction/' + details.uid + '/register' : undefined,
     };
   }
   async function sendLogin(request: FastifyRequest, reply: FastifyReply, details: Details, status = 200) {
-    if (protocolUi) reply.header('content-security-policy', protocolPageCsp);
+    const options = await loginOptions(request, details);
+    const csp = options.signInLogoUrl
+      ? protocolPageCsp.replace("img-src 'self' data:", `img-src 'self' data: ${new URL(options.signInLogoUrl).origin}`)
+      : protocolPageCsp;
+    reply.header('content-security-policy', csp);
     return reply.code(status).type('text/html').send(render('login', {
-      ...await loginOptions(request, details), invalid: status !== 200 && status !== 429, throttled: status === 429 }));
+      ...options, invalid: status !== 200 && status !== 429, throttled: status === 429 }));
   }
   // Shown only when the request can no longer be completed: it expired, or it was opened in another browser.
   async function sendExpired(request: FastifyRequest, reply: FastifyReply, uid?: string) {

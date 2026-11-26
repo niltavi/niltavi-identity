@@ -67,19 +67,32 @@
   }
 
   /* Auth layout: banner panel + form */
-  .nt-authlayout { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); min-height: 0; flex: 1; }
+  .nt-authlayout { display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; flex: 1; }
   :root { --banner-paper: var(--color-paper); --banner-veil: transparent; }
   :is(.dark, [data-theme="dark"]) { --banner-paper: var(--surface-secondary); --banner-veil: color-mix(in srgb, var(--color-throat-975) 35%, transparent); }
   .nt-banner-panel { background: linear-gradient(var(--banner-veil), var(--banner-veil)), var(--banner-paper); }
-  .nt-authlayout__brand { position: relative; overflow: hidden; }
+  .nt-authlayout__brand { display: none; position: relative; overflow: hidden; }
   .nt-banner { position: absolute; inset: calc(var(--spacing) * 6); display: block; width: calc(100% - var(--spacing) * 12); height: calc(100% - var(--spacing) * 12); object-fit: contain; }
-  .nt-authlayout__main { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; min-width: 0; overflow-y: auto; padding: 32px 24px; }
-  .nt-authlayout__logo { margin-bottom: 8px; }
+  .nt-authlayout__main { position: relative; display: flex; flex-direction: column; min-width: 0; }
+  .nt-authlayout__content {
+    display: flex; flex-direction: column; align-items: center; gap: calc(var(--spacing) * 7);
+    padding: calc(var(--spacing) * 7) calc(var(--spacing) * 4);
+  }
+  .nt-authlayout__logo { max-width: min(100%, 340px); }
+  .nt-authlayout__controls { margin-inline-start: auto; }
+  .nt-authlayout__controls .niltavi-product-header { border: 0; background: transparent; }
+  .nt-authlayout__controls .niltavi-project-brand { display: none; }
+  .nt-authlayout__footer {
+    display: flex; align-items: center; justify-content: flex-end; gap: calc(var(--spacing) * 3);
+    margin-block-start: auto; padding: calc(var(--spacing) * 4); color: var(--muted); opacity: .76;
+  }
 
-  @media (max-width: 767px) {
-    .nt-authlayout { grid-template-columns: minmax(0, 1fr); }
-    .nt-authlayout__brand { display: none; }
-    .nt-authlayout__main { justify-content: flex-start; padding: 28px 16px; }
+  @media (min-width: 768px) {
+    .nt-authlayout { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); }
+    .nt-authlayout__brand { display: block; }
+    .nt-authlayout__content { justify-content: center; flex: 1; padding: calc(var(--spacing) * 10) calc(var(--spacing) * 6); }
+    .nt-authlayout__controls { position: absolute; inset: 0 0 auto auto; z-index: 1; }
+    .nt-authlayout__footer { padding: calc(var(--spacing) * 5) calc(var(--spacing) * 6); }
   }
 
   /* Auth form */

@@ -13,7 +13,6 @@ import type { ComponentProps, FormEvent, ReactNode } from 'react';
 import { BannerScene } from './banner';
 import { codeOf, problem } from './api';
 import type { Account, Settings } from './api';
-import { ProjectBrand } from '../vendor/niltavi-ui/product/ProductHeader';
 import { RouteLink } from './site';
 import type { Language, Navigate, Route } from './site';
 
@@ -216,15 +215,35 @@ export function CodeHelp({ error, onResend, isPending = false }: { error: string
   </div>;
 }
 
-export function AuthLayout({ children }: { children: ReactNode }) {
+type SignInBrand = {
+  name?: string | undefined;
+  logoUrl?: string | undefined;
+  logoAlt?: string | undefined;
+};
+
+export function AuthLayout({ children, brand, controls }: { children: ReactNode; brand?: SignInBrand; controls?: ReactNode }) {
+  const [failedLogo, setFailedLogo] = useState<string>();
+  const logo = brand?.logoUrl !== failedLogo ? brand?.logoUrl : undefined;
   return <div className="nt-authlayout">
     <aside className="nt-authlayout__brand nt-banner-panel"><BannerScene /></aside>
-    <main className="nt-authlayout__main">
-      <div className="nt-authlayout__logo">
-        <ProjectBrand name="Identity" href="/" symbol={<ShieldCheck width={40} height={40} />} />
-      </div>
-      {children}
-    </main>
+    <div className="nt-authlayout__main">
+      {controls && <div className="nt-authlayout__controls">{controls}</div>}
+      <main className="nt-authlayout__content">
+        {(brand?.name || logo) && <div className="nt-authlayout__logo niltavi-project-brand">
+          {logo && <span className="niltavi-project-brand__symbol">
+            <img src={logo} alt={brand?.name ? '' : brand?.logoAlt ?? ''} width={40} height={40}
+              referrerPolicy="no-referrer" onError={() => setFailedLogo(logo)} />
+          </span>}
+          {brand?.name && <span className="niltavi-project-brand__name" title={brand.name}>{brand.name}</span>}
+        </div>}
+        {children}
+      </main>
+      <footer className="nt-authlayout__footer">
+        <img className="niltavi-product-footer__light" src="/identity-assets/niltavi-logo-light.svg" alt="Niltavi" width={48} height={18} />
+        <img className="niltavi-product-footer__dark" src="/identity-assets/niltavi-logo-dark.svg" alt="Niltavi" width={48} height={18} />
+        <ShieldCheck role="img" aria-label="Identity" width={16} height={16} />
+      </footer>
+    </div>
   </div>;
 }
 

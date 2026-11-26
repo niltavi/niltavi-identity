@@ -11,6 +11,7 @@ if (view === 'login' || view === 'logout' || view === 'signed-out' || view === '
   createRoot(root).render(<ProtocolPage data={{
     view, invalid: data.invalid === 'true', throttled: data.throttled === 'true', registration: data.registration, recover: Boolean(data.recover),
     language: data.language === 'zh-CN' ? 'zh-CN' : 'en', appName: data.appName, appUrl: data.appUrl,
+    signInName: data.signInName, signInLogoUrl: data.signInLogoUrl,
   }} />);
 } else {
   // The prerendered markup knows the section only. The open tab is applied after hydration.

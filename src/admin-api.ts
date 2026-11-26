@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
 import {
   applyAccountEnabled, audit, getSetting, lockInstanceAdministration, markEmailVerified, operatorResetLink, registerApplication, rotateApplicationSecret,
-  setApplicationEnabled, setInstanceRole, setSetting, standardApplication, transaction,
+  setApplicationBranding, setApplicationEnabled, setInstanceRole, setSetting, standardApplication, transaction,
 } from './database.js';
 import { PasswordRejected, passwordHash, passwordProblem } from './credentials.js';
 import type { Mailer } from './mail.js';
@@ -177,6 +177,7 @@ export function registerAdmin(app: FastifyInstance, pool: Pool, issuer: URL, web
     if (!await reader(request, reply)) return reply;
     const applications = (await pool.query(
       `SELECT id, name, home_url AS "homeUrl", callback, post_logout AS "postLogout", backchannel_logout AS notifications,
+              sign_in_name AS "signInName", sign_in_logo_url AS "signInLogoUrl",
               enabled, created_at AS "createdAt" FROM applications ORDER BY created_at, id`)).rows;
     return { applications };
   });
@@ -196,6 +197,19 @@ export function registerAdmin(app: FastifyInstance, pool: Pool, issuer: URL, web
     if (!fields(request)) return failure(reply, 400, 'unexpected_body');
     try { return await rotateApplicationSecret(pool, encryptionKey, request.params.id, viewer.id); }
     catch (error) { return rejected(reply, error); }
+  });
+
+  app.post<Target>('/admin/api/applications/:id/branding', guard, async (request, reply) => {
+    const viewer = await writer(request, reply);
+    if (!viewer) return reply;
+    const [name, logo] = fields(request, 'signInName', 'signInLogoUrl') ?? [];
+    if (name === undefined || logo === undefined) return failure(reply, 400, 'unexpected_body');
+    try {
+      if (!await setApplicationBranding(pool, request.params.id, name, logo, viewer.id)) {
+        return failure(reply, 404, 'application_not_found');
+      }
+      return { updated: true };
+    } catch (error) { return rejected(reply, error); }
   });
 
   app.post<Target>('/admin/api/applications/:id/status', guard, async (request, reply) => {
