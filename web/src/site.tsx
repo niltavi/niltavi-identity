@@ -90,6 +90,12 @@ function useTheme() {
   return { theme, toggle };
 }
 
+export function IdentityIcon({ size }: { size: number }) {
+  return <span aria-hidden="true" className="block bg-current forced-color-adjust-none" style={{
+    width: size, height: size, mask: 'url(/identity-assets/identity-logo-icon.svg) center / contain no-repeat',
+  }} />;
+}
+
 // `onLanguage` is for pages that cannot change address when the language changes, such as a sign-in request in progress.
 export function BrandHeader({ route, navigate, publicPage = false, onLanguage }:
   { route: Route; navigate?: Navigate; publicPage?: boolean; onLanguage?: (language: Language) => void }) {
@@ -106,8 +112,7 @@ export function BrandHeader({ route, navigate, publicPage = false, onLanguage }:
     else window.location.assign(href);
   }
   const header = <ProductHeader
-    brand={{ name: 'Identity', href: pathFor(brandRoute), symbol: <span className="size-full bg-current forced-color-adjust-none"
-      style={{ mask: 'url(/identity-assets/identity-logo-icon.svg) center / contain no-repeat' }} />,
+    brand={{ name: 'Identity', href: pathFor(brandRoute), symbol: <IdentityIcon size={40} />,
       onClick: event => followRoute(event, brandRoute, navigate) }}
     labels={labels} theme={theme} onToggleTheme={toggle} githubHref={repository} locale={language} locales={locales}
     variant={publicPage ? 'site' : 'app'}

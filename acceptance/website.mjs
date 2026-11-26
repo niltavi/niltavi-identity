@@ -40,6 +40,7 @@ try {
     await expect(page.locator('link[hreflang="en"]')).toHaveAttribute('href', origin + '/');
     await expect(page.locator('link[hreflang="zh-CN"]')).toHaveAttribute('href', origin + '/zh/');
     await expect(page.locator('link[hreflang=x-default]')).toHaveAttribute('href', origin + '/');
+    await page.locator('main img[src$="identity-logo-textured.png"]').evaluate(image => image.decode());
     assert.equal(await page.locator('form').count(), 0);
   }
   const sitemap = await page.evaluate(async () => (await fetch('/sitemap.xml')).text());
@@ -57,7 +58,7 @@ try {
   await expect(github).toHaveAttribute('href', 'https://github.com/niltavi/niltavi-identity');
   const brandMetrics = await brand.evaluate(n => {
     const rules = getComputedStyle(n);
-    const symbol = n.querySelector('svg').getBoundingClientRect();
+    const symbol = n.querySelector('.niltavi-project-brand__symbol > *').getBoundingClientRect();
     return [rules.fontSize, rules.fontWeight, rules.lineHeight, rules.gap, symbol.width, symbol.height];
   });
   assert.deepEqual(brandMetrics, ['20px', '500', '20px', '10px', 40, 40]);
@@ -81,6 +82,14 @@ try {
   assert.equal(await page.evaluate(() => window.__identityDoc), 'retained');
   await expect(page.getByRole('heading', { name: /一个账号，\s*登录多个应用/ })).toBeVisible();
   await header.getByRole('button', { name: '切换到深色主题' }).click();
+
+  async function brandColorCheck() {
+    const [name, symbol] = await brand.evaluate(n => [
+      getComputedStyle(n.querySelector('.niltavi-project-brand__name')).color,
+      getComputedStyle(n.querySelector('.niltavi-project-brand__symbol > *')).backgroundColor,
+    ]);
+    assert.equal(symbol, name);
+  }
 
   async function colorCheck(mode) {
     const [canvas, root, expected] = await page.evaluate(mode => {
@@ -108,6 +117,7 @@ try {
     }
   }
   const dark = await colorCheck('dark');
+  await brandColorCheck();
   await widths();
   if (evidence) {
     await mkdir(evidence, { recursive: true });
@@ -148,6 +158,7 @@ try {
   await header.getByRole('button', { name: 'Switch to light theme' }).click();
   const light = await colorCheck('light');
   assert.notEqual(light, dark);
+  await brandColorCheck();
   await widths();
   await page.setViewportSize({ width: 1280, height: 850 });
   await expect(page.getByRole('contentinfo').getByRole('link')).toHaveCount(1);
