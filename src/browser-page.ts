@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { pagePath, pageSections, publicSections } from './browser-routes.js';
 
 const contentTypes: Readonly<Record<string, string>> = {
   '.js': 'text/javascript; charset=utf-8',
@@ -21,7 +22,6 @@ export type ProtocolOptions = {
   passwordless?: boolean;
   interactionPath?: string; loginPath?: string;
 };
-export const pageSections = ['home', 'login', 'register', 'workspace', 'recover', 'reset', 'verify-email', 'invite', 'setup', 'admin'] as const;
 const attribute = (value: string) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
 export async function registerBrowserPage(app: FastifyInstance, issuer: URL) {
@@ -34,9 +34,10 @@ export async function registerBrowserPage(app: FastifyInstance, issuer: URL) {
   }
   const mount = '<div id="root"></div>';
   if (!page.includes(mount)) throw new Error('The browser bundle is missing its application root.');
-  for (const [base, language] of [['', 'en'], ['/zh', 'zh-CN']] as const) {
+  const languages = ['en', 'zh-CN'] as const;
+  for (const language of languages) {
     for (const section of pageSections) {
-      const path = base + (section === 'home' ? '/' : '/' + section);
+      const path = pagePath(language, section);
       const html = (await readFile(new URL(section + '.' + language + '.html', root), 'utf8'))
         .replaceAll('__IDENTITY_ORIGIN__', issuer.origin);
       const send = async (_request: unknown, reply: FastifyReply) => reply.header('content-security-policy', `${protocolPageCsp}; form-action 'self'`)
@@ -51,7 +52,8 @@ export async function registerBrowserPage(app: FastifyInstance, issuer: URL) {
   app.get('/sitemap.xml', async (_request, reply) => reply.type('application/xml; charset=utf-8').send(
     '<?xml version="1.0" encoding="UTF-8"?>' +
     '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' +
-    ['/', '/zh/'].map(path => '<url><loc>' + issuer.origin + path + '</loc></url>').join('') + '</urlset>'));
+    publicSections.flatMap(section => languages.map(language =>
+      '<url><loc>' + issuer.origin + pagePath(language, section) + '</loc></url>')).join('') + '</urlset>'));
 
   const directory = new URL('identity-assets/', root);
   for (const entry of await readdir(directory, { withFileTypes: true })) {

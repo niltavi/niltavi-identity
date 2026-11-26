@@ -1,7 +1,8 @@
 import { copyFile, readFile, writeFile } from 'node:fs/promises';
 import { renderToString } from 'react-dom/server';
-import { BrowserApp } from './src/main';
-import { copy, pathFor, sections } from './src/site';
+import { isPublicSection, pageSections } from '../src/browser-routes';
+import { BrowserApp, pageMetadata } from './src/main';
+import { pathFor } from './src/site';
 import type { Language } from './src/site';
 import { themeInitialization, themeKey } from './vendor/niltavi-ui/product/theme';
 
@@ -22,20 +23,20 @@ await Promise.all([
 ]);
 
 for (const language of ['en', 'zh-CN'] as const satisfies readonly Language[]) {
-  for (const section of sections) {
+  for (const section of pageSections) {
     const route = { language, section };
     const path = pathFor(route);
-    const labels = copy[language];
+    const labels = pageMetadata(route);
     const canonical = '<link rel="canonical" href="' + origin + path + '" />';
     const alternates = ['en', 'zh-CN', 'x-default'].map(alternate => '<link rel="alternate" hreflang="' + alternate +
       '" href="' + origin + pathFor({ section, language: alternate === 'zh-CN' ? 'zh-CN' : 'en' }) + '" />');
     const metadata = [
       '<title>' + escape(labels.title) + '</title>',
       '<meta name="description" content="' + escape(labels.description) + '" />',
-      '<meta name="robots" content="' + (section === 'home' ? 'index,follow' : 'noindex') + '" />',
+      '<meta name="robots" content="' + (isPublicSection(section) ? 'index,follow' : 'noindex') + '" />',
       canonical, ...alternates,
     ];
-    const markup = renderToString(<BrowserApp initial={route} />);
+    const markup = renderToString(<BrowserApp initial={route} origin={origin} />);
     const page = template.replace('<html lang="en">', '<html lang="' + language + '">')
       .replace('<title>Niltavi Identity</title>', metadata.join('\n    '))
       .replace('<div id="root"></div>', () => '<div id="root" data-prerendered>' + markup + '</div>');

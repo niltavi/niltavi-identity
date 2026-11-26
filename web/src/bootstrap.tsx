@@ -17,7 +17,7 @@ if (view === 'login' || view === 'register' || view === 'recover' || view === 'l
 } else {
   // The prerendered markup knows the section only. The open tab is applied after hydration.
   const { language, section } = routeFor(window.location.pathname);
-  const app = <BrowserApp initial={{ language, section }} />;
+  const app = <BrowserApp initial={{ language, section }} origin={window.location.origin} />;
   if (root.hasAttribute('data-prerendered')) hydrateRoot(root, app);
   else createRoot(root).render(app);
 }
