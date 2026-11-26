@@ -5,14 +5,15 @@ import type { Pool } from 'pg';
 import { normalizeEmail, openClientSecret, sealClientSecret } from './credentials.js';
 import { getSetting, setSetting } from './database.js';
 import type { Queryable } from './database.js';
+import { mailSupport, messages } from './mail-templates.js';
+import type { Message } from './mail-templates.js';
 import { loadTencentSes } from './tencent-ses.js';
 import type { VerificationDelivery } from './tencent-ses.js';
 
-export type MailLanguage = 'en' | 'zh';
+export { messages } from './mail-templates.js';
 export type SmtpSecurity = 'tls' | 'starttls' | 'none';
 export type SmtpInput = { host: string; port: number; security: SmtpSecurity; username: string; password: string; from: string };
 type StoredSmtp = Omit<SmtpInput, 'password'> & { password: string | null };
-type Message = { subject: string; text: string };
 type Send = (to: string, message: Message) => Promise<void>;
 
 const sealLabel = 'instance:smtp';
@@ -51,8 +52,12 @@ function transport({ host, port, security, username, password, from }: SmtpInput
     ...(ca ? { tls: { ca } } : {}),
     disableFileAccess: true, disableUrlAccess: true,
   });
-  return async (to, { subject, text }) => {
-    const result = await transporter.sendMail({ from: { name: product, address: from }, to, subject, text });
+  return async (to, message) => {
+    const result = await transporter.sendMail({
+      from: { name: product, address: from }, to, replyTo: mailSupport,
+      headers: { 'Auto-Submitted': 'auto-generated' },
+      ...message,
+    });
     if (!result.accepted.length) throw new Error('SMTP did not accept the message.');
   };
 }
@@ -72,47 +77,6 @@ async function environmentSmtp(): Promise<Send | undefined> {
     from: mailAddress(process.env.IDENTITY_SMTP_FROM ?? ''),
   }, caFile ? await readFile(caFile) : undefined);
 }
-
-const pick = (language: MailLanguage, en: string, zh: string) => language === 'zh' ? zh : en;
-
-export const messages = {
-  code: (code: string, language: MailLanguage): Message => ({
-    subject: pick(language, `${code} is your ${product} verification code`, `${code} 是你的 ${product} 验证码`),
-    text: pick(language,
-      `Enter this verification code in ${product} within 15 minutes:\n\n${code}\n\nIf you did not request an account, ignore this message.`,
-      `请在 15 分钟内，在 ${product} 中输入以下验证码：\n\n${code}\n\n如果你没有申请账号，请忽略这封邮件。`),
-  }),
-  existing: (origin: string, language: MailLanguage): Message => ({
-    subject: pick(language, `You already have a ${product} account`, `你已经有 ${product} 账号`),
-    text: pick(language,
-      `Someone tried to register with this address, which already has an account.\n\nSign in: ${origin}/login\nForgot the password: ${origin}/recover\n\nIf this was not you, no action is needed.`,
-      `有人尝试用这个邮箱注册，但它已经有账号。\n\n登录：${origin}/zh/login\n忘记密码：${origin}/zh/recover\n\n如果不是你本人操作，无需处理。`),
-  }),
-  reset: (link: string, language: MailLanguage): Message => ({
-    subject: pick(language, `Reset your ${product} password`, `重置你的 ${product} 密码`),
-    text: pick(language,
-      `Open this link within 30 minutes to choose a new password. It works once.\n\n${link}\n\nIf you did not ask to reset your password, ignore this message.`,
-      `请在 30 分钟内打开下面的链接设置新密码。链接只能使用一次。\n\n${link}\n\n如果你没有申请重置密码，请忽略这封邮件。`),
-  }),
-  verify: (link: string, language: MailLanguage): Message => ({
-    subject: pick(language, `Confirm your ${product} email`, `确认你的 ${product} 邮箱`),
-    text: pick(language,
-      `Open this link within 24 hours to confirm this address. It works once.\n\n${link}`,
-      `请在 24 小时内打开下面的链接确认这个邮箱。链接只能使用一次。\n\n${link}`),
-  }),
-  invitation: (link: string, team: string, inviter: string, language: MailLanguage): Message => ({
-    subject: pick(language, `${inviter} invited you to ${team}`, `${inviter} 邀请你加入 ${team}`),
-    text: pick(language,
-      `${inviter} invited you to the team ${team} on ${product}. Open this link within 7 days to accept. It works once.\n\n${link}`,
-      `${inviter} 邀请你加入 ${product} 上的团队 ${team}。请在 7 天内打开下面的链接接受邀请。链接只能使用一次。\n\n${link}`),
-  }),
-  test: (code: string, language: MailLanguage): Message => ({
-    subject: pick(language, `${product} test message`, `${product} 发信测试`),
-    text: pick(language,
-      `Outgoing mail works. Enter this code in ${product} to confirm the settings:\n\n${code}`,
-      `发信配置可用。请在 ${product} 中输入以下确认码完成配置：\n\n${code}`),
-  }),
-};
 
 export async function createMailer(pool: Pool, key: Buffer) {
   const sesFile = process.env.IDENTITY_TENCENT_SES_CONFIG_FILE;
@@ -141,11 +105,11 @@ export async function createMailer(pool: Pool, key: Buffer) {
         ...(stored ? { host: stored.host, port: stored.port, security: stored.security, username: stored.username, from: stored.from } : {}),
       };
     },
-    async sendCode(to: string, code: string, language: MailLanguage) {
-      if (ses) return ses(to, code, language);
+    async sendCode(to: string, code: string) {
+      if (ses) return ses(to, code);
       const send = await smtp();
       if (!send) throw new Error('Outgoing mail is not configured.');
-      return send(to, messages.code(code, language));
+      return send(to, messages.code(code));
     },
     async send(to: string, message: Message) {
       const send = await smtp();

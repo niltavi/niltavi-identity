@@ -17,6 +17,8 @@ In a Docker Compose deployment the command is `docker compose -p niltavi-identit
 
 Identity derives three addresses from the home URL's origin, and the SDK serves all three: `/auth/callback`, `/auth/signed-out` and `/auth/notifications`. Identity must be able to reach `/auth/notifications` over HTTPS from its own network.
 
+In the instance console, open **Applications** and choose **Sign-in branding** for the application. Set a display name, a publicly reachable HTTPS logo URL, or both. Identity shows these above the form when this application starts an OpenID Connect sign-in. Clear both fields to hide the application brand.
+
 When Core installs an application, its installer can call the same operator command and capture its JSON output directly. Map `client_id` and `client_secret` to the application's server-side secret store before starting it. Keep the registration output out of installer logs. If the ID already exists, reuse the credential already provisioned for that application or have an operator rotate it if it was lost.
 
 ## 2. Install the SDK

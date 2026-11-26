@@ -11,6 +11,8 @@ export interface Application {
   id: string;
   name: string;
   home_url: string;
+  sign_in_name: string | null;
+  sign_in_logo_url: string | null;
   enabled: boolean;
   callback: string;
   post_logout: string;
@@ -48,7 +50,7 @@ export async function audit(db: Queryable, action: string, target: string, actor
 }
 
 const migrationFiles = ['schema.sql', 'schema-browser.sql', 'schema-enrollment.sql', 'schema-registration-intents.sql',
-  'schema-teams.sql', 'schema-email-codes.sql', 'schema-registration-policy.sql'];
+  'schema-teams.sql', 'schema-email-codes.sql', 'schema-registration-policy.sql', 'schema-application-branding.sql'];
 export const schemaVersion = migrationFiles.length;
 
 // Serialize first-account ownership, operator provisioning and registration policy changes.
@@ -256,6 +258,19 @@ export async function rotateApplicationSecret(pool: Pool, key: Buffer, id: strin
     if (!changed.rowCount) throw new Error('Application does not exist.');
     await audit(db, 'application.secret_rotated', id, actor);
     return { client_id: id, client_secret: secret };
+  });
+}
+
+export async function setApplicationBranding(pool: Pool, id: string, name: string, logo: string, actor?: string) {
+  const signInName = name.trim();
+  if ([...signInName].length > 80) throw new Error('Give the sign-in name at most 80 characters.');
+  const signInLogoUrl = logo.trim() ? httpsUrl(logo.trim(), 'Sign-in logo URL').href : null;
+  return transaction(pool, async (db) => {
+    const updated = await db.query('UPDATE applications SET sign_in_name = $2, sign_in_logo_url = $3 WHERE id = $1',
+      [id, signInName || null, signInLogoUrl]);
+    if (!updated.rowCount) return false;
+    await audit(db, 'application.branding_updated', id, actor);
+    return true;
   });
 }
 

@@ -1,8 +1,16 @@
-import { Alert, Button, Card, Chip, Description, FieldError, Form, Input, Label, ListBox, Select, Skeleton, Surface, TextField } from '@heroui/react';
+import { Alert, Button, Card, Chip, Description, FieldError, Form, Input, InputGroup, InputOTP, Label, ListBox, Select, Skeleton, Surface, TextField } from '@heroui/react';
+import ArrowLeft from '@gravity-ui/icons/ArrowLeft';
 import Check from '@gravity-ui/icons/Check';
 import Copy from '@gravity-ui/icons/Copy';
+import Envelope from '@gravity-ui/icons/Envelope';
+import Eye from '@gravity-ui/icons/Eye';
+import EyeSlash from '@gravity-ui/icons/EyeSlash';
+import Lock from '@gravity-ui/icons/Lock';
+import Pencil from '@gravity-ui/icons/Pencil';
+import ShieldCheck from '@gravity-ui/icons/ShieldCheck';
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import type { ComponentProps, FormEvent, ReactNode } from 'react';
+import { BannerScene } from './banner';
 import { codeOf, problem } from './api';
 import type { Account, Settings } from './api';
 import { RouteLink } from './site';
@@ -11,6 +19,7 @@ import type { Language, Navigate, Route } from './site';
 export type App = {
   language: Language;
   navigate: Navigate;
+  routeHref?: (route: Route) => string;
   t: (en: string, zh: string) => string;
   settings: Settings | undefined;
   // `undefined` while the session is being checked, `null` when nobody is signed in.
@@ -132,29 +141,38 @@ export function useTime() {
     ? new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '', [language]);
 }
 
-export function PageLink({ to, children, ...props }: Omit<ComponentProps<typeof RouteLink>, 'route' | 'navigate'> & { to: Omit<Route, 'language'> }) {
-  const { language, navigate } = useApp();
-  return <RouteLink {...props} route={{ ...to, language }} navigate={navigate}>{children}</RouteLink>;
+export function PageLink({ to, children, ...props }: Omit<ComponentProps<typeof RouteLink>, 'route' | 'navigate' | 'href'> & { to: Omit<Route, 'language'> }) {
+  const { language, navigate, routeHref } = useApp();
+  const route = { ...to, language };
+  return <RouteLink {...props} route={route} navigate={navigate} {...(routeHref ? { href: routeHref(route) } : {})}>{children}</RouteLink>;
 }
 
 export function passwordLength(value: string) { return [...value].length; }
 
-// States the one password rule before anyone types, then counts down to it.
-export function PasswordField({ label, error, rule, onInput, autoFocus, validateOnSubmit, submitted }:
+export function PasswordField({ label, error, rule, onInput, autoFocus, validateOnSubmit, submitted, autoComplete = 'new-password', name = 'password' }:
   { label: string; error?: string | undefined; rule: { minimum: number; maximum: number }; onInput?: () => void;
-    autoFocus?: boolean; validateOnSubmit?: boolean; submitted?: boolean }) {
+    autoFocus?: boolean; validateOnSubmit?: boolean; submitted?: boolean; autoComplete?: string; name?: string }) {
   const { t } = useApp();
   const [value, setValue] = useState('');
+  const [visible, setVisible] = useState(false);
   const length = passwordLength(value);
   const requirement = t(`${rule.minimum} characters or more`, `至少 ${rule.minimum} 个字符`);
   const missing = rule.minimum - length;
   const maximum = t(`At most ${rule.maximum} characters`, `最多 ${rule.maximum} 个字符`);
   const lengthError = submitted && (missing > 0 ? requirement : length > rule.maximum ? maximum : undefined);
   const message = lengthError || error;
-  return <TextField name="password" type="password" autoComplete="new-password" isRequired isInvalid={Boolean(message)}
+  return <TextField name={name} type={visible ? 'text' : 'password'} autoComplete={autoComplete} isRequired isInvalid={Boolean(message)}
     value={value} onChange={next => { setValue(next); onInput?.(); }} {...(autoFocus ? { autoFocus: true } : {})}>
     <Label>{label}</Label>
-    <Input className="w-full min-w-0" />
+    <InputGroup>
+      <InputGroup.Prefix><Lock aria-hidden="true" width={14} height={14} /></InputGroup.Prefix>
+      <InputGroup.Input placeholder="••••••••" />
+      <InputGroup.Suffix className="pe-0">
+        <Button isIconOnly size="sm" variant="ghost" aria-label={visible ? t('Hide password', '隐藏密码') : t('Show password', '显示密码')} onPress={() => setVisible(v => !v)}>
+          {visible ? <EyeSlash aria-hidden="true" width={14} height={14} /> : <Eye aria-hidden="true" width={14} height={14} />}
+        </Button>
+      </InputGroup.Suffix>
+    </InputGroup>
     {!validateOnSubmit && <Description aria-live="polite" data-password-state={length > rule.maximum ? 'long' : missing > 0 ? 'short' : 'met'}>
       {length > rule.maximum ? <span className="text-danger">{maximum}</span>
         : missing <= 0 ? <span className="inline-flex items-center gap-1 text-success"><Check aria-hidden="true" width={14} height={14} />
@@ -166,15 +184,82 @@ export function PasswordField({ label, error, rule, onInput, autoFocus, validate
   </TextField>;
 }
 
-// `onInput` must clear `error`: a field marked invalid blocks its form until the person edits it.
-export function CodeField({ label, description, error, onInput, name = 'code' }:
-  { label: string; description?: ReactNode; error: string | undefined; onInput: () => void; name?: string }) {
-  return <TextField name={name} isRequired isInvalid={Boolean(error)} autoComplete="one-time-code" onChange={onInput}>
+export function CodeField({ label, error, onInput, onComplete }:
+  { label: string; error: string | undefined; onInput: () => void; onComplete?: (value: string) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [value, setValue] = useState('');
+  useEffect(() => { ref.current?.querySelector('input')?.focus(); }, []);
+  return <div className="nt-auth__otp" ref={ref}>
     <Label>{label}</Label>
-    <Input className="w-full min-w-0 tracking-widest" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} />
-    {description && <Description>{description}</Description>}
-    <FieldError>{error}</FieldError>
-  </TextField>;
+    <InputOTP maxLength={6} value={value} isInvalid={Boolean(error)} onChange={v => { setValue(v); onInput(); if (v.length === 6) onComplete?.(v); }}
+      aria-label={label}>
+      <InputOTP.Group><InputOTP.Slot index={0} /><InputOTP.Slot index={1} /><InputOTP.Slot index={2} /></InputOTP.Group>
+      <InputOTP.Separator />
+      <InputOTP.Group><InputOTP.Slot index={3} /><InputOTP.Slot index={4} /><InputOTP.Slot index={5} /></InputOTP.Group>
+    </InputOTP>
+    {error && <span className="text-danger text-sm">{error}</span>}
+  </div>;
+}
+
+export function SentTo({ label, value, onEdit }: { label: string; value: string; onEdit: () => void }) {
+  const { t } = useApp();
+  return <div className="nt-auth__sent nt-fade-in">
+    <div><span>{label}</span><strong>{value}</strong></div>
+    <Button size="sm" variant="ghost" onPress={onEdit}><Pencil aria-hidden="true" width={14} height={14} />{t('Edit', '编辑')}</Button>
+  </div>;
+}
+
+export function CodeHelp({ error, onResend, isPending = false }: { error: string | undefined; onResend: () => void; isPending?: boolean | undefined }) {
+  const { t } = useApp();
+  return <div className="nt-auth__codehelp">
+    {error ? <span className="text-danger text-sm">{error}</span> : <Description>{t('Enter the 6-digit code', '输入 6 位验证码')}</Description>}
+    <Button size="sm" variant="ghost" className="nt-resend" isPending={isPending} onPress={onResend}>{t('Resend code', '重新发送')}</Button>
+  </div>;
+}
+
+type SignInBrand = {
+  name?: string | undefined;
+  logoUrl?: string | undefined;
+  logoAlt?: string | undefined;
+};
+
+export function AuthLayout({ children, brand, controls }: { children: ReactNode; brand?: SignInBrand; controls?: ReactNode }) {
+  const [failedLogo, setFailedLogo] = useState<string>();
+  const logo = brand?.logoUrl !== failedLogo ? brand?.logoUrl : undefined;
+  return <div className="nt-authlayout">
+    <aside className="nt-authlayout__brand nt-banner-panel"><BannerScene /></aside>
+    <div className="nt-authlayout__main">
+      {controls && <div className="nt-authlayout__controls">{controls}</div>}
+      <main className="nt-authlayout__content">
+        {(brand?.name || logo) && <div className="nt-authlayout__logo niltavi-project-brand">
+          {logo && <span className="niltavi-project-brand__symbol">
+            <img src={logo} alt={brand?.name ? '' : brand?.logoAlt ?? ''} width={40} height={40}
+              referrerPolicy="no-referrer" onError={() => setFailedLogo(logo)} />
+          </span>}
+          {brand?.name && <span className="niltavi-project-brand__name" title={brand.name}>{brand.name}</span>}
+        </div>}
+        {children}
+      </main>
+      <footer className="nt-authlayout__footer">
+        <img className="niltavi-product-footer__light" src="/identity-assets/niltavi-logo-light.svg" alt="Niltavi" width={48} height={18} />
+        <img className="niltavi-product-footer__dark" src="/identity-assets/niltavi-logo-dark.svg" alt="Niltavi" width={48} height={18} />
+        <a className="nt-authlayout__identity" href="https://identity.niltavi.com/" aria-label="Identity">
+          <ShieldCheck aria-hidden="true" width={16} height={16} />
+        </a>
+      </footer>
+    </div>
+  </div>;
+}
+
+export function StepIndicator({ steps, current }: { steps: string[]; current: number }) {
+  return <ol className="nt-steps" aria-label="Progress">{steps.map((s, i) =>
+    <li key={s} data-state={i < current ? 'done' : i === current ? 'current' : undefined} aria-current={i === current ? 'step' : undefined}><span className="sr-only">{s}</span></li>
+  )}</ol>;
+}
+
+export function AuthBack({ onPress }: { onPress: () => void }) {
+  const { t } = useApp();
+  return <Button isIconOnly size="sm" variant="ghost" aria-label={t('Back', '返回')} onPress={onPress}><ArrowLeft aria-hidden="true" width={16} height={16} /></Button>;
 }
 
 export function readForm(event: FormEvent<HTMLFormElement>) {
@@ -248,7 +333,6 @@ export function Choice({ label, value, onChange, options, isDisabled, className,
   </Select>;
 }
 
-// The shared email and password layout, including inline validation.
 export function CredentialsForm({ title, submit, mode, rule, defaultEmail, onSubmit, children, footer, disabled, validateOnSubmit }: {
   title: string; submit: string; mode: 'sign-in' | 'register'; rule?: { minimum: number; maximum: number };
   defaultEmail?: string | undefined; disabled?: boolean; validateOnSubmit?: boolean;
@@ -280,29 +364,26 @@ export function CredentialsForm({ title, submit, mode, rule, defaultEmail, onSub
     }
   }
   const clear = (name: 'email' | 'password') => setErrors(({ [name]: _removed, ...rest }) => rest);
-  return <section className="niltavi-email-password">
-    <h1 className="text-balance text-2xl font-semibold tracking-tight">{title}</h1>
+  return <div className="nt-auth nt-fade-up">
+    <div className="nt-auth__head"><h3>{title}</h3></div>
     {children}
-    <Form className="niltavi-email-password__form" method="post" onSubmit={event => void send(event)} validationBehavior="native">
-      <fieldset className="niltavi-email-password__fields" disabled={Boolean(disabled)}>
-        <TextField name="email" type="email" autoComplete={mode === 'register' ? 'email' : 'username'} isRequired
-          isInvalid={Boolean(errors.email)} {...(defaultEmail ? { defaultValue: defaultEmail } : {})} onChange={() => clear('email')}>
-          <Label>{t('Email', '邮箱')}</Label>
-          <Input className="w-full min-w-0" />
-          <FieldError>{errors.email}</FieldError>
-        </TextField>
-        {rule ? <PasswordField label={t('Password', '密码')} rule={rule} error={errors.password} onInput={() => clear('password')}
-            validateOnSubmit={Boolean(validateOnSubmit)} submitted={submitted} />
-          : <TextField name="password" type="password" autoComplete="current-password" isRequired isInvalid={Boolean(errors.password)}
-              onChange={() => clear('password')}>
-            <Label>{t('Password', '密码')}</Label>
-            <Input className="w-full min-w-0" />
-            <FieldError>{errors.password}</FieldError>
-          </TextField>}
-        <Button type="submit" isPending={pending} className="w-full">{submit}</Button>
-      </fieldset>
-      {errors.message && <p role="alert">{errors.message}</p>}
+    <Form className="nt-auth__form" method="post" onSubmit={event => void send(event)} validationBehavior="native">
+      <TextField name="email" type="email" autoComplete={mode === 'register' ? 'email' : 'username'} isRequired
+        isInvalid={Boolean(errors.email)} {...(defaultEmail ? { defaultValue: defaultEmail } : {})} onChange={() => clear('email')}>
+        <Label>{t('Email', '邮箱')}</Label>
+        <InputGroup>
+          <InputGroup.Prefix><Envelope aria-hidden="true" width={14} height={14} /></InputGroup.Prefix>
+          <InputGroup.Input placeholder="you@example.com" />
+        </InputGroup>
+        <FieldError>{errors.email}</FieldError>
+      </TextField>
+      {rule ? <PasswordField label={t('Password', '密码')} rule={rule} error={errors.password} onInput={() => clear('password')}
+          validateOnSubmit={Boolean(validateOnSubmit)} submitted={submitted} />
+        : <PasswordField label={t('Password', '密码')} rule={{ minimum: 1, maximum: 256 }} error={errors.password}
+            onInput={() => clear('password')} autoComplete="current-password" validateOnSubmit />}
+      <Button type="submit" isPending={pending} isDisabled={Boolean(disabled)} className="w-full">{submit}</Button>
+      {errors.message && <p role="alert" className="text-danger">{errors.message}</p>}
     </Form>
-    {footer && <div className="flex flex-wrap gap-x-5 gap-y-2">{footer}</div>}
-  </section>;
+    {footer && <p className="nt-auth__links nt-auth__foot">{footer}</p>}
+  </div>;
 }

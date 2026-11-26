@@ -62,6 +62,7 @@ const problems: Record<string, [string, string]> = {
   json_required: ['Something went wrong. Reload the page and try again.', '出了点问题，请刷新页面后重试。'],
   try_later: ['Too many attempts. Try again later.', '尝试次数过多，请稍后再试。'],
   sign_in_required: ['Your session has ended. Sign in again.', '登录已失效，请重新登录。'],
+  interaction_expired: ['This sign-in request has expired. Start again from the application.', '登录请求已过期，请从应用重新发起登录。'],
   invalid_email: ['Enter a valid email address.', '请输入有效的邮箱地址。'],
   invalid_password: ['Use a password of 12 to 256 characters.', '密码长度须为 12 到 256 个字符。'],
   common_password: ['This password is too easy to guess. Choose a different one.', '这个密码太容易被猜到，请换一个。'],

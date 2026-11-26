@@ -4,7 +4,9 @@ This page states what Identity guarantees to people, to applications, and to ope
 
 ## Accounts and passwords
 
-An account is an email address and a password. Every account owns a personal space and can belong to any number of teams.
+An account has an email address and may have a password. Every account owns a personal space and can belong to any number of teams.
+
+When email codes are available, the same form handles sign-in and first-time registration. An existing account signs in after verification. A new address becomes a verified account and signs in immediately if the instance's registration policy permits it. The password form links to password registration when registration is enabled.
 
 One password rule applies everywhere: 12 to 256 characters counted by character, no composition requirement, and no password from the list of commonly breached ones. Pasting and password managers work. Applications never see or store passwords and must not add a rule of their own.
 
@@ -16,6 +18,10 @@ An address is verified by a code or a link mailed to it, or by an instance admin
 
 Identity is an OpenID Connect provider. Discover it at `/.well-known/openid-configuration` on the issuer.
 
+Niltavi products share accounts and a sign-in session through the official issuer. A self-hosted instance supplies its own accounts and sessions. A connected application can use either issuer as its primary login or offer it alongside its own login methods. It can link an authorized Identity account to an existing application account and retain its own profile and permissions.
+
+Upstream sign-in with Google or GitHub is a separate integration, in which Identity accepts a provider's authentication and then issues its own application session. The current service implements downstream OIDC and email or password sign-in. SMS delivery and upstream social sign-in have yet to be integrated.
+
 - Authorization code with S256 PKCE is the only flow. The redirect address must equal the registered one exactly.
 - Registered applications authenticate with `client_secret_basic`.
 - Scopes: `openid`, `email` (`email`, `email_verified`), `profile` (`name`, `locale`), `orgs`. The claims are in the ID token and in UserInfo.
@@ -23,7 +29,7 @@ Identity is an OpenID Connect provider. Discover it at `/.well-known/openid-conf
 - `ui_locales` chooses the language of the sign-in page (`en` or `zh-CN`). Without it the page follows the browser.
 - `prompt=create` opens registration directly.
 
-The sign-in page names the application that asked. After sign-in or registration the browser returns straight to the application's callback. A browser that already has a session at Identity returns without any input. A page that says the request expired, with a button back to the application, appears only when the request can no longer be completed.
+Sign-in, registration, and the password recovery form show the application's configured branding. Moving between these pages keeps the same authorization request. Completing sign-in or registration returns the browser straight to the application's callback, using the original state and PKCE challenge. A browser that already has a session at Identity returns without input when the application does not request fresh authentication. When the request expires or opens in a different browser, the page links back to the application.
 
 Which page the user came from is the application's own business. Keep it on the application side and accept only a same-origin relative path.
 
@@ -101,5 +107,5 @@ The audit trail records sign-ins and failed sign-ins, password resets, membershi
 ## Deployment profiles
 
 - `self-hosted` is the default.
-- `hosted` requires HTTPS issuers on `niltavi.com` or one of its subdomains and supports delivery of verification codes through Tencent SES.
+- `hosted` requires HTTPS issuers on `niltavi.com` or one of its subdomains. It supports SMTP delivery and can optionally use Tencent SES for verification codes.
 - `acceptance` enables scoped test mailbox domains and scoped account operators for isolated test runs.

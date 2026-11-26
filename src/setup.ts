@@ -7,7 +7,7 @@ import { audit, getLogin, getSetting, insertAccount, lockInstanceAdministration,
 import type { Queryable } from './database.js';
 import { mailAddress, messages, smtpInput } from './mail.js';
 import type { Mailer } from './mail.js';
-import { failure, fields, requestLanguage } from './web-session.js';
+import { failure, fields } from './web-session.js';
 import type { WebSessions } from './web-session.js';
 
 type SetupLink = { digest: string; expires: number };
@@ -29,10 +29,10 @@ export async function issueSetupLink(pool: Pool, issuer: string) {
 const mailFields = ['host', 'port', 'security', 'username', 'password', 'from'] as const;
 
 // Activates outgoing mail only after the administrator confirms receipt of the test message.
-export async function beginMailTest(db: Queryable, mailer: Mailer, values: string[], actor: string, to: string, language: 'en' | 'zh') {
+export async function beginMailTest(db: Queryable, mailer: Mailer, values: string[], actor: string, to: string) {
   const settings = smtpInput(Object.fromEntries(mailFields.map((name, index) => [name, values[index] ?? ''])));
   const code = String(randomInt(1_000_000)).padStart(6, '0');
-  try { await mailer.try(settings, to, messages.test(code, language)); }
+  try { await mailer.try(settings, to, messages.test(code)); }
   catch { throw new Error('mail_test_failed'); }
   await setSetting(db, 'smtp_pending', { sealed: mailer.seal(settings), code: digest(`mail-test:${code}`),
     expires: Date.now() + 900_000, attempts: 0, actor, to } satisfies PendingMail);
@@ -121,7 +121,7 @@ export function registerSetup(app: FastifyInstance, pool: Pool, web: WebSessions
     const viewer = await web.viewer(request);
     const current = await owner();
     if (!viewer || !current || viewer.id !== current.id) return failure(reply, 403, 'setup_owner_required');
-    try { await beginMailTest(pool, mailer, values!.slice(1), current.id, current.email, requestLanguage(request)); }
+    try { await beginMailTest(pool, mailer, values!.slice(1), current.id, current.email); }
     catch (error) { return failure(reply, 400, error instanceof Error ? error.message : 'invalid_mail_settings'); }
     return reply.code(202).send({ sentTo: current.email });
   });

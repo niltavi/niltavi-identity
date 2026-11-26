@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import type { ReactNode } from 'react';
 import { Admin } from './admin';
 import { call, codeOf } from './api';
 import type { Account, Settings } from './api';
@@ -6,7 +7,7 @@ import { Invite, Recover, Register, Reset, SignIn, VerifyEmail, arrive, remember
 import { Setup } from './setup';
 import { BrandFooter, BrandHeader, Website, container, copy, pathFor, routeFor } from './site';
 import type { Navigate, Route } from './site';
-import { AppContext, Loaded } from './ui';
+import { AppContext, AuthLayout, Loaded } from './ui';
 import type { App } from './ui';
 import { Workspace } from './workspace';
 
@@ -18,7 +19,7 @@ const titles: Partial<Record<Route['section'], [string, string]>> = {
   invite: ['Team invitation', '团队邀请'], setup: ['Set up Niltavi Identity', '初始化 Niltavi Identity'], admin: ['Instance console', '实例管理台'],
 };
 
-function Identity({ route, navigate }: { route: Route; navigate: Navigate }) {
+function Identity({ route, navigate, loginControls }: { route: Route; navigate: Navigate; loginControls: ReactNode }) {
   const { language, section } = route;
   const [settings, setSettings] = useState<Settings>();
   const [account, setAccount] = useState<Account | null>();
@@ -64,19 +65,19 @@ function Identity({ route, navigate }: { route: Route; navigate: Navigate }) {
 
   const waiting = failure !== undefined || account === undefined || (guarded && !account) ||
     (Boolean(account) && (section === 'login' || section === 'register' || section === 'recover'));
+  const authSection = section === 'login' || section === 'register' || section === 'recover' || section === 'reset' || section === 'verify-email' || section === 'invite';
   return <AppContext.Provider value={app}>
-    {waiting ? <main className={`${container} flex-1 py-8 md:py-12`}>
-      <div className="max-w-md"><Loaded source={{ data: undefined, error: failure, reload: start }}>{() => null}</Loaded></div>
-    </main>
+    {waiting ? (authSection
+      ? <AuthLayout controls={loginControls}><div className="max-w-md"><Loaded source={{ data: undefined, error: failure, reload: start }}>{() => null}</Loaded></div></AuthLayout>
+      : <main className={`${container} flex-1 py-8 md:py-12`}><div className="max-w-md"><Loaded source={{ data: undefined, error: failure, reload: start }}>{() => null}</Loaded></div></main>)
       : section === 'workspace' ? <Workspace route={route} />
       : section === 'admin' ? <Admin route={route} />
+      : authSection ? <AuthLayout controls={loginControls}>
+        {section === 'login' ? <SignIn /> : section === 'register' ? <Register /> : section === 'recover' ? <Recover />
+          : section === 'reset' ? <Reset /> : section === 'verify-email' ? <VerifyEmail /> : <Invite />}
+      </AuthLayout>
       : <main className={`${container} flex flex-1 justify-center py-8 md:py-12`}>
-        <div className="w-full min-w-0">
-          <div className={section === 'setup' ? '' : 'mx-auto max-w-[22rem]'}>
-            {section === 'login' ? <SignIn /> : section === 'register' ? <Register /> : section === 'recover' ? <Recover />
-              : section === 'reset' ? <Reset /> : section === 'verify-email' ? <VerifyEmail /> : section === 'invite' ? <Invite /> : <Setup />}
-          </div>
-        </div>
+        <div className="w-full min-w-0"><Setup /></div>
       </main>}
   </AppContext.Provider>;
 }
@@ -116,13 +117,19 @@ export function BrowserApp({ initial }: { initial: Route }) {
 
   const isHome = route.section === 'home';
   const hasSidebar = route.section === 'workspace' || route.section === 'admin';
+  const isAuth = route.section === 'login' || route.section === 'register' || route.section === 'recover' ||
+    route.section === 'reset' || route.section === 'verify-email' || route.section === 'invite';
+  const header = <BrandHeader route={route} navigate={navigate} publicPage={isHome} />;
+  const loginControls = route.section === 'login' ? header : undefined;
+  const loadingPlaceholder = <main className={container + ' flex-1 py-8 md:py-12'} aria-busy="true">
+    <p role="status" className="text-muted">{route.language === 'en' ? 'Loading…' : '正在加载…'}</p>
+  </main>;
   return <div className={`flex flex-col bg-background text-foreground ${hasSidebar ? 'app-shell' : 'min-h-svh'}`}>
-    <BrandHeader route={route} navigate={navigate} publicPage={isHome} />
+    {!isAuth && header}
     {isHome ? <Website language={route.language} navigate={navigate} /> : interactive
-      ? <Identity route={route} navigate={navigate} />
-      : <main className={container + ' flex-1 py-8 md:py-12'} aria-busy="true">
-          <p role="status" className="text-muted">{route.language === 'en' ? 'Loading…' : '正在加载…'}</p>
-        </main>}
-    {!hasSidebar && <BrandFooter />}
+      ? <Identity route={route} navigate={navigate} loginControls={loginControls} />
+      : isAuth ? <AuthLayout controls={loginControls}><p role="status" className="text-muted">{route.language === 'en' ? 'Loading…' : '正在加载…'}</p></AuthLayout>
+      : loadingPlaceholder}
+    {!hasSidebar && !isAuth && <BrandFooter />}
   </div>;
 }

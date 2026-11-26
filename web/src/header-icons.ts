@@ -1,5 +1,12 @@
+export { default as ArrowLeft } from '@gravity-ui/icons/ArrowLeft';
 export { default as Check } from '@gravity-ui/icons/Check';
+export { default as Envelope } from '@gravity-ui/icons/Envelope';
+export { default as Eye } from '@gravity-ui/icons/Eye';
+export { default as EyeSlash } from '@gravity-ui/icons/EyeSlash';
 export { default as Globe } from '@gravity-ui/icons/Globe';
+export { default as Lock } from '@gravity-ui/icons/Lock';
 export { default as LogoGithub } from '@gravity-ui/icons/LogoGithub';
 export { default as Moon } from '@gravity-ui/icons/Moon';
+export { default as Pencil } from '@gravity-ui/icons/Pencil';
+export { default as ShieldCheck } from '@gravity-ui/icons/ShieldCheck';
 export { default as Sun } from '@gravity-ui/icons/Sun';

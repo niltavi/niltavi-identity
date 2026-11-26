@@ -24,7 +24,7 @@ import { createNotifier } from './notify.js';
 import { createProtocolStore } from './protocol-store.js';
 import { registerSetup } from './setup.js';
 import { orgsFor, registerTeams } from './teams.js';
-import { createWebSessions } from './web-session.js';
+import { createWebSessions, failure, fields } from './web-session.js';
 import { beginRegistrationIntent, intentDigest, oidcInteractionSeconds, validInteractionUid } from './registration-intent.js';
 import { registrationPolicy } from './registration.js';
 import { httpsUrl, loadKeyRing, loadSecretEncryptionKey, required, secretDirectory } from './settings.js';
@@ -40,12 +40,14 @@ function page(title: string, markup: string, language: Language = 'en') {
 }
 
 // Plain pages for a build without the browser bundle. They carry the same facts as the shared UI.
-function plainPage(view: ProtocolView, { invalid, form, registration, recover, language = 'en', appName, appUrl }: ProtocolOptions) {
+function plainPage(view: ProtocolView, { invalid, form, registration, recover, language = 'en', appName, appUrl, signInName, signInLogoUrl }: ProtocolOptions) {
   const text = (en: string, zh: string) => language === 'en' ? en : zh;
   const app = appName ? escape(appName) : undefined;
   if (view === 'login') {
-    return page(app ? text(`Sign in to continue to ${appName}`, `登录以继续使用 ${appName}`) : text('Sign in to Niltavi Identity', '登录 Niltavi Identity'),
-      `${invalid ? `<p>${text('Credentials were not accepted.', '邮箱或密码不正确。')}</p>` : ''}
+    return page(text('Sign in', '登录'),
+      `${signInLogoUrl ? `<img src="${escape(signInLogoUrl)}" alt="${signInName ? '' : app ?? ''}" width="40" height="40" referrerpolicy="no-referrer">` : ''}
+      ${signInName ? `<p>${escape(signInName)}</p>` : ''}
+      ${invalid ? `<p>${text('Credentials were not accepted.', '邮箱或密码不正确。')}</p>` : ''}
       <form method="post"><p><label>${text('Email', '邮箱')} <input type="email" name="email" required autocomplete="username"></label></p>
       <p><label>${text('Password', '密码')} <input type="password" name="password" required autocomplete="current-password"></label></p>
       <button type="submit">${text('Sign in', '登录')}</button></form>
@@ -155,19 +157,29 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
   const localPath = (language: Language, path: string) => (language === 'zh-CN' ? '/zh' : '') + path;
 
   type Details = { uid: string; params: Record<string, unknown> };
-  async function loginOptions(request: FastifyRequest, details: Details): Promise<ProtocolOptions> {
+  type AuthDetails = Details & { prompt: { name: string } };
+  async function loginOptions(request: FastifyRequest, details: AuthDetails): Promise<ProtocolOptions> {
     const language = preferred(request, details.params.ui_locales);
     const requester = typeof details.params.client_id === 'string' ? await registered(details.params.client_id) : undefined;
     const canRegister = registrationEnabled && validInteractionUid(details.uid) && await registrationPolicy(pool) !== 'closed';
+    const interactionPath = '/interaction/' + details.uid;
     return {
-      language, appName: requester?.name, appUrl: requester?.home_url, recover: localPath(language, '/recover'),
-      registration: canRegister ? '/interaction/' + details.uid + '/register' : undefined,
+      language, appName: requester?.name, appUrl: requester?.home_url,
+      interactionPath, loginPath: details.prompt.name === 'create' ? interactionPath + '/login' : interactionPath,
+      recover: protocolUi ? interactionPath + '/recover' : localPath(language, '/recover'),
+      signInName: requester?.sign_in_name ?? undefined, signInLogoUrl: requester?.sign_in_logo_url ?? undefined,
+      registration: canRegister ? interactionPath + '/register' : undefined,
+      passwordless: await browserAuth.passwordlessAvailable(),
     };
   }
-  async function sendLogin(request: FastifyRequest, reply: FastifyReply, details: Details, status = 200) {
-    if (protocolUi) reply.header('content-security-policy', protocolPageCsp);
-    return reply.code(status).type('text/html').send(render('login', {
-      ...await loginOptions(request, details), invalid: status !== 200 && status !== 429, throttled: status === 429 }));
+  async function sendInteraction(request: FastifyRequest, reply: FastifyReply, details: AuthDetails, view: 'login' | 'register' | 'recover', status = 200) {
+    const options = await loginOptions(request, details);
+    const csp = options.signInLogoUrl
+      ? protocolPageCsp.replace("img-src 'self' data:", `img-src 'self' data: ${new URL(options.signInLogoUrl).origin}`)
+      : protocolPageCsp;
+    reply.header('content-security-policy', csp).header('referrer-policy', 'same-origin');
+    return reply.code(status).type('text/html').send(render(view, {
+      ...options, invalid: status !== 200 && status !== 429, throttled: status === 429 }));
   }
   // Shown only when the request can no longer be completed: it expired, or it was opened in another browser.
   async function sendExpired(request: FastifyRequest, reply: FastifyReply, uid?: string) {
@@ -341,7 +353,7 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
       return reply.code(503).send({ ready: false });
     }
   });
-  await registerBrowserAuth(app, { pool, issuer, web, mailer, notifier, store, encryptionKey, backupHash, realm, registrationEnabled });
+  const browserAuth = await registerBrowserAuth(app, { pool, issuer, web, mailer, notifier, store, encryptionKey, backupHash, realm, registrationEnabled });
   registerTeams(app, pool, issuer, web, mailer, notifier);
   registerAdmin(app, pool, issuer, web, mailer, notifier, encryptionKey);
   registerSetup(app, pool, web, mailer, backupHash);
@@ -366,36 +378,73 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     }
   }
 
+  async function completedRegistration(request: FastifyRequest, uid: string) {
+    const key = intentDigest(request, realm, uid);
+    if (!key) return false;
+    const completed = await pool.query(
+      'SELECT 1 FROM registration_intents WHERE token_digest = $1 AND interaction_uid = $2 AND account_id IS NOT NULL AND expires_at > now()',
+      [key, uid]);
+    return Boolean(completed.rowCount);
+  }
+
   app.get<{ Params: { uid: string } }>('/interaction/:uid', async (request, reply) => store.request(async () => {
     const details = await provider.interactionDetails(request.raw, reply.raw).catch(() => undefined);
     if (!details || details.uid !== request.params.uid || !validInteractionUid(details.uid)) return sendExpired(request, reply, request.params.uid);
+    if (await completedRegistration(request, details.uid)) return reply.redirect('/interaction/' + details.uid + '/registered', 303);
     if (details.prompt.name === 'create') return reply.redirect('/interaction/' + details.uid + '/register', 303);
     if (details.prompt.name !== 'login') return reply.code(400).send({ error: 'unexpected_interaction' });
     // A browser already signed in to Identity continues without typing anything, unless the
     // application asked for a fresh sign-in.
     const viewer = details.prompt.reasons.every((reason) => reason === 'no_session') ? await web.viewer(request) : undefined;
     if (viewer && await store.isEnabled(viewer.id)) return finish(request, reply, details, viewer.id);
-    return sendLogin(request, reply.header('referrer-policy', 'same-origin'), details);
+    return sendInteraction(request, reply, details, 'login');
   }));
-  app.post<{ Params: { uid: string }; Body: URLSearchParams }>('/interaction/:uid', async (request, reply) => store.request(async () => {
+  async function completeBrowserSignIn(request: FastifyRequest, reply: FastifyReply, account: string, token: string, result: Record<string, unknown>) {
+    let target: URL;
+    try {
+      const resume = await provider.interactionResult(request.raw, reply.raw, { login: { accountId: account }, ...result }, { mergeWithLastSubmission: false });
+      target = new URL(resume, issuer);
+    } catch { return failure(reply, 409, 'interaction_expired'); }
+    if (target.origin !== issuer.origin || !target.pathname.startsWith('/auth/')) return failure(reply, 409, 'interaction_expired');
+    web.grant(reply, token);
+    return { continueTo: target.pathname + target.search };
+  }
+  app.post<{ Params: { uid: string } }>('/interaction/:uid', async (request, reply) => store.request(async () => {
     // A same-origin form response must preserve Origin for a retry after invalid credentials.
     reply.header('referrer-policy', 'same-origin');
-    if (request.headers.origin !== issuer.origin) return reply.code(403).send({ error: 'unexpected_origin' });
-    const details = await provider.interactionDetails(request.raw, reply.raw).catch(() => undefined);
-    if (!details || details.uid !== request.params.uid || details.prompt.name !== 'login') return sendExpired(request, reply, request.params.uid);
+    if (request.headers.origin !== issuer.origin) return failure(reply, 403, 'unexpected_origin');
     const body = request.body;
-    if (!(body instanceof URLSearchParams) || body.getAll('email').length !== 1 || body.getAll('password').length !== 1) {
-      return reply.code(400).send({ error: 'invalid_form' });
+    const native = body instanceof URLSearchParams;
+    if (!native && request.headers['content-type']?.split(';', 1)[0] !== 'application/json') return failure(reply, 415, 'json_required');
+    const details = await provider.interactionDetails(request.raw, reply.raw).catch(() => undefined);
+    if (!details || details.uid !== request.params.uid || !['login', 'create'].includes(details.prompt.name)) {
+      return native ? sendExpired(request, reply, request.params.uid) : failure(reply, 409, 'interaction_expired');
     }
+    const promptResult = details.prompt.name === 'create' ? { create: {} } : {};
+    if (!native && fields(request, 'email')) return browserAuth.requestLoginCode(request, reply, details.uid);
+    if (!native && fields(request, 'code')) {
+      const result = await browserAuth.verifyLoginCode(request, reply, details.uid);
+      if (!result) return reply;
+      if (!store.remember(result.id, result.epoch) || !await store.isEnabled(result.id)) return failure(reply, 400, 'invalid_code');
+      return completeBrowserSignIn(request, reply, result.id, result.token, promptResult);
+    }
+    const submitted = native
+      ? body.getAll('email').length === 1 && body.getAll('password').length === 1 ? [body.get('email')!, body.get('password')!] : undefined
+      : fields(request, 'email', 'password');
+    if (!submitted) return failure(reply, 400, 'invalid_form');
+    const rejected = (status: number, error: string) => native ? sendInteraction(request, reply, details, 'login', status) : failure(reply, status, error);
     let email: string;
-    try { email = normalizeEmail(body.get('email') ?? ''); }
-    catch { return sendLogin(request, reply, details, 400); }
-    if (!await loginRateAllowed(pool, request.ip, email)) return sendLogin(request, reply.header('retry-after', '60'), details, 429);
+    try { email = normalizeEmail(submitted[0] ?? ''); }
+    catch { return rejected(400, 'invalid_email'); }
+    if (!await loginRateAllowed(pool, request.ip, email)) {
+      reply.header('retry-after', '60');
+      return rejected(429, 'try_later');
+    }
     const account = await getLogin(pool, email);
-    const authentic = await verifyAccountPassword(body.get('password') ?? '', account?.password_hash, backupHash);
+    const authentic = await verifyAccountPassword(submitted[1] ?? '', account?.password_hash, backupHash);
     if (!account?.enabled || !authentic || !store.remember(account.id, account.security_epoch) || !await store.isEnabled(account.id)) {
       await audit(pool, 'account.sign_in_failed', account?.id ?? 'unknown', account?.id);
-      return sendLogin(request, reply, details, 401);
+      return rejected(401, 'invalid_credentials');
     }
     // The same sign-in also opens the account center in this browser.
     const token = await transaction(pool, async (db) => {
@@ -405,27 +454,54 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
       await audit(db, 'account.signed_in', account.id, account.id, typeof details.params.client_id === 'string' ? details.params.client_id : undefined);
       return web.issue(db, account.id, account.security_epoch, request);
     });
-    if (!token) return sendLogin(request, reply, details, 401);
-    return finish(request, reply, details, account.id, {}, web.cookie(token));
+    if (!token) return rejected(401, 'invalid_credentials');
+    return native ? finish(request, reply, details, account.id, promptResult, web.cookie(token))
+      : completeBrowserSignIn(request, reply, account.id, token, promptResult);
   }));
   type InteractionRequest = FastifyRequest<{ Params: { uid: string } }>;
-  async function registrationInteraction(request: InteractionRequest, reply: FastifyReply) {
-    if (!registrationEnabled || !validInteractionUid(request.params.uid)) return undefined;
+  async function activeInteraction(request: InteractionRequest, reply: FastifyReply) {
+    if (!validInteractionUid(request.params.uid)) return undefined;
     const details = await provider.interactionDetails(request.raw, reply.raw).catch(() => undefined);
     return details?.uid === request.params.uid && ['login', 'create'].includes(details.prompt.name) ? details : undefined;
   }
-  app.get<{ Params: { uid: string } }>('/interaction/:uid/register', async (request, reply) => store.request(async () => {
-    const details = await registrationInteraction(request, reply);
+  app.get<{ Params: { uid: string } }>('/interaction/:uid/login', async (request, reply) => store.request(async () => {
+    const details = await activeInteraction(request, reply);
     if (!details) return sendExpired(request, reply, request.params.uid);
+    if (await completedRegistration(request, details.uid)) return reply.redirect('/interaction/' + details.uid + '/registered', 303);
+    return sendInteraction(request, reply, details, 'login');
+  }));
+  app.get<{ Params: { uid: string } }>('/interaction/:uid/recover', async (request, reply) => store.request(async () => {
+    const details = await activeInteraction(request, reply);
+    if (!details) return sendExpired(request, reply, request.params.uid);
+    return protocolUi ? sendInteraction(request, reply, details, 'recover')
+      : reply.redirect(localPath(preferred(request, details.params.ui_locales), '/recover'), 303);
+  }));
+  app.get<{ Params: { uid: string } }>('/interaction/:uid/register', async (request, reply) => store.request(async () => {
+    const details = registrationEnabled ? await activeInteraction(request, reply) : undefined;
+    if (!details) return sendExpired(request, reply, request.params.uid);
+    if (await completedRegistration(request, details.uid)) return reply.redirect('/interaction/' + details.uid + '/registered', 303);
+    if (protocolUi) return sendInteraction(request, reply, details, 'register');
     await beginRegistrationIntent(pool, reply, details.uid, realm);
     return reply.redirect(localPath(preferred(request, details.params.ui_locales), '/register'), 303);
+  }));
+  app.get<{ Params: { uid: string } }>('/interaction/:uid/register/enrollment', async (request, reply) => store.request(async () => {
+    const details = registrationEnabled ? await activeInteraction(request, reply) : undefined;
+    return details ? browserAuth.pendingEnrollment(request, reply, details.uid) : failure(reply, 409, 'interaction_expired');
+  }));
+  app.post<{ Params: { uid: string } }>('/interaction/:uid/register', { preHandler: web.origin }, async (request, reply) => store.request(async () => {
+    const details = registrationEnabled ? await activeInteraction(request, reply) : undefined;
+    if (!details) return failure(reply, 409, 'interaction_expired');
+    if (fields(request, 'email', 'code')) return browserAuth.verifyEnrollment(request, reply, details.uid);
+    if (fields(request)) return browserAuth.resendEnrollment(request, reply, details.uid);
+    return browserAuth.registerAccount(request, reply, details.uid);
   }));
   // The registration page sends the browser here once the account exists. The intent row is
   // deleted as it is read, so the link completes one authorization request exactly once.
   app.get<{ Params: { uid: string } }>('/interaction/:uid/registered', async (request, reply) => store.request(async () => {
-    const details = await registrationInteraction(request, reply);
-    const intent = intentDigest(request, realm);
-    if (!details || !intent) return sendExpired(request, reply, request.params.uid);
+    const details = registrationEnabled ? await activeInteraction(request, reply) : undefined;
+    if (!details) return sendExpired(request, reply, request.params.uid);
+    const intent = intentDigest(request, realm, details.uid) ?? intentDigest(request, realm);
+    if (!intent) return sendExpired(request, reply, request.params.uid);
     const account = (await pool.query<{ id: string; security_epoch: number }>(
       `DELETE FROM registration_intents r USING accounts a
         WHERE r.token_digest = $1 AND r.interaction_uid = $2 AND r.expires_at > now() AND r.account_id = a.id

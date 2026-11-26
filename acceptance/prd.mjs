@@ -324,6 +324,11 @@ try {
   const one = { ...(await owner.post('/admin/api/applications', registration)).body, callback: 'https://app-one.localhost:43921/auth/callback' };
   const two = { ...(await owner.post('/admin/api/applications', { id: 'app-two', name: 'App Two', homeUrl: 'https://app-two.localhost:43922/' })).body,
     callback: 'https://app-two.localhost:43922/auth/callback' };
+  const brandingPath = `/admin/api/applications/${one.client_id}/branding`;
+  const branding = { signInName: 'Brand One & Co', signInLogoUrl: 'https://assets.example.test/one.svg' };
+  assert.equal((await unverified.post(brandingPath, branding)).body.error, 'second_factor_required');
+  assert.equal((await owner.post(brandingPath, { ...branding, signInLogoUrl: 'http://assets.example.test/one.svg' })).status, 400);
+  assert.equal((await owner.post(brandingPath, branding)).status, 200);
   secret(one.client_secret);
   secret(two.client_secret);
   assert.equal((await http('GET', '/apps/self', { headers: basic(one.client_id, one.client_secret) })).body.name, 'App One');
@@ -347,13 +352,21 @@ try {
   const loginPage = await first.follow(await first.start());
   assert.equal(loginPage.status, 200);
   assert.match(loginPage.text, /data-app-name="App One"/);
+  assert.match(loginPage.text, /data-sign-in-name="Brand One &amp; Co"/);
+  assert.match(loginPage.text, /data-sign-in-logo-url="https:\/\/assets\.example\.test\/one\.svg"/);
   assert.match(loginPage.text, /data-language="zh-CN"/);
+  assert.doesNotMatch(loginPage.text, /data-passwordless=/);
+  const unbranded = flow(two);
+  assert.doesNotMatch((await unbranded.follow(await unbranded.start())).text, /data-sign-in-(name|logo-url)=/);
+  passed('only an application with configured sign-in branding supplies it to its OIDC sign-in page');
   const interaction = loginPage.text.match(/data-registration="(\/interaction\/[\w-]+)\/register"/)[1];
   const wrong = await first.session.form(interaction, { email: memberEmail, password: 'not the password' });
   const missing = await first.session.form(interaction, { email: 'nobody@example.test', password: 'not the password' });
   assert.equal(wrong.status, 401);
   assert.equal(missing.status, 401);
   assert.equal(wrong.text, missing.text, 'A wrong password and an unknown address get the same page');
+  assert.deepEqual((await first.session.post(interaction, { email: memberEmail, password: 'not the password' })).body,
+    { error: 'invalid_credentials' });
   const signedIn = await first.follow(await first.session.form(interaction, { email: memberEmail, password: newPassword }));
   assert.ok(signedIn.location.startsWith(one.callback), 'Sign-in returns straight to the application');
   const tokens = (await first.tokens(signedIn.location)).body;
@@ -391,11 +404,18 @@ try {
   assert.match(elsewhere.text, /data-protocol="expired"/);
   assert.match(elsewhere.text, /data-app-name="App One"/);
   assert.match(elsewhere.text, /data-app-url="https:\/\/app-one\.localhost:43921\/"/);
-  assert.equal((await fresh.session.get(freshInteraction)).location, '/zh/register');
-  const signup = await fresh.session.post('/account/register', { email: 'newcomer@example.test', password });
+  const registrationPage = await fresh.session.get(freshInteraction);
+  assert.equal(registrationPage.status, 200);
+  assert.match(registrationPage.text, /data-protocol="register"/);
+  assert.match(registrationPage.text, /data-sign-in-name="Brand One &amp; Co"/);
+  assert.match(registrationPage.text, /data-language="zh-CN"/);
+  assert.match(registrationPage.text, /data-login-path="\/interaction\/[\w-]+"/);
+  assert.equal((await browser().get(freshInteraction)).status, 400);
+  const signup = await fresh.session.post(freshInteraction, { email: 'newcomer@example.test', password });
   assert.match(signup.body.continueTo, /^\/interaction\/[\w-]+\/registered$/);
   const returned = await fresh.follow(await fresh.session.get(signup.body.continueTo));
   assert.ok(returned.location?.startsWith(one.callback), 'A new account lands on the application callback directly');
+  assert.equal(new URL(returned.location).searchParams.get('state'), fresh.state);
   assert.equal(decodeJwt((await fresh.tokens(returned.location)).body.id_token).email, 'newcomer@example.test');
   assert.equal((await fresh.session.get(signup.body.continueTo)).status, 400, 'The continuation link completes one request once');
   passed('a new registration returns to the application with no intermediate page');
@@ -596,6 +616,71 @@ try {
   assert.deepEqual([config.registrationMode, config.recoveryAvailable], ['verify-email', true]);
   passed('outgoing mail is saved only after the owner confirms the code from a real test message');
 
+  const otp = flow(one, browser(), { prompt: 'login' });
+  const started = await otp.start();
+  const loginPath = new URL(started.location, issuer).pathname;
+  assert.match((await otp.follow(started)).text, /data-passwordless="true"/);
+  const mailStart = inbox.length;
+  assert.equal((await otp.session.post(loginPath, { email: memberEmail })).status, 202);
+  const [, loginCode] = await mail(memberEmail, /^(\d{6})$/m, mailStart);
+  assert.equal((await browser().post(loginPath, { code: loginCode })).body.error, 'interaction_expired');
+  assert.equal((await otp.session.post('/account/login-verify', { code: loginCode })).body.error, 'invalid_code');
+  const verifiedLogin = await otp.session.post(loginPath, { code: loginCode });
+  assert.equal(verifiedLogin.status, 200);
+  assert.match(verifiedLogin.body.continueTo, /^\/auth\//);
+  const returnedToApp = await otp.follow(await otp.session.get(verifiedLogin.body.continueTo));
+  assert.ok(returnedToApp.location.startsWith(one.callback));
+  assert.equal(decodeJwt((await otp.tokens(returnedToApp.location)).body.id_token).sub, memberId);
+  assert.equal((await otp.session.get('/account/session')).body.account.id, memberId);
+  passed('sign-in with an email code completes the original app request and opens an Identity session');
+
+  const automatic = flow(one);
+  const automaticStart = await automatic.start();
+  const automaticPath = new URL(automaticStart.location, issuer).pathname;
+  const automaticEmail = 'automatic-sign-in@example.test';
+  const firstCodeMail = inbox.length;
+  assert.equal((await automatic.session.post(automaticPath, { email: automaticEmail })).status, 202);
+  const [, appSignupCode] = await mail(automaticEmail, /^(\d{6})$/m, firstCodeMail);
+  const automaticStandalone = browser();
+  const nextCodeMail = inbox.length;
+  assert.equal((await automaticStandalone.post('/account/login-code', { email: automaticEmail })).status, 202);
+  const [, standaloneSignupCode] = await mail(automaticEmail, /^(\d{6})$/m, nextCodeMail);
+  await assert.rejects(getAccount(pool, automaticEmail), /Account does not exist/);
+  const [appSession, standaloneSession] = await Promise.all([
+    automatic.session.post(automaticPath, { code: appSignupCode }),
+    automaticStandalone.post('/account/login-verify', { code: standaloneSignupCode }),
+  ]);
+  assert.equal(appSession.status, 200);
+  assert.equal(standaloneSession.status, 204);
+  const automaticReturn = await automatic.follow(await automatic.session.get(appSession.body.continueTo));
+  assert.equal(new URL(automaticReturn.location).searchParams.get('state'), automatic.state);
+  const automaticClaims = decodeJwt((await automatic.tokens(automaticReturn.location)).body.id_token);
+  const automaticAccount = (await automaticStandalone.get('/account/session')).body.account;
+  assert.equal(automaticClaims.sub, automaticAccount.id);
+  assert.deepEqual([automaticClaims.email, automaticClaims.email_verified, automaticAccount.emailVerified], [automaticEmail, true, true]);
+  passed('verifying the same new email concurrently creates one verified account and signs it in through both entry points');
+
+  const signupFlow = flow(one);
+  const signupStart = await signupFlow.start();
+  const signupLogin = new URL(signupStart.location, issuer).pathname;
+  const signupRegister = signupLogin + '/register';
+  const signupAddress = 'branded-registration@example.test';
+  const signupMailStart = inbox.length;
+  assert.equal((await signupFlow.session.post(signupRegister, { email: signupAddress })).status, 202);
+  const [, signupCode] = await mail(signupAddress, /^(\d{6})$/m, signupMailStart);
+  assert.equal((await signupFlow.session.get(signupLogin)).status, 200);
+  assert.equal((await signupFlow.session.get(signupRegister)).status, 200);
+  assert.equal((await signupFlow.session.get(signupRegister + '/enrollment')).body.email, signupAddress);
+  assert.equal((await signupFlow.session.get('/account/enrollment')).status, 404);
+  const signupVerified = await signupFlow.session.post(signupRegister, { email: signupAddress, code: signupCode });
+  assert.equal(signupVerified.status, 201);
+  const signupResumed = await signupFlow.session.get(signupRegister);
+  assert.equal(signupResumed.location, signupVerified.body.continueTo);
+  const signupReturned = await signupFlow.follow(signupResumed);
+  assert.equal(new URL(signupReturned.location).searchParams.get('state'), signupFlow.state);
+  assert.equal(decodeJwt((await signupFlow.tokens(signupReturned.location)).body.id_token).email, signupAddress);
+  passed('branded registration survives back navigation and verification resumes the same application request');
+
   // Registration answers the same for a new and an existing address.
   const timed = async (email) => {
     const started = performance.now();
@@ -689,20 +774,40 @@ try {
   assert.equal((await invited.post('/account/verify', { email: 'invited@example.test', code: invitedCode })).status, 201);
   assert.equal((await invited.post('/account/invitation/accept', { token: mailedInviteToken })).body.org, team.id);
   assert.equal((await invited.get(`/account/orgs/${team.id}`)).body.org.role, 'admin');
+  const otpInviteEmail = 'invited-by-code@example.test';
+  const otpInvite = await owner.post(`/account/orgs/${team.id}/invitations`, { email: otpInviteEmail, role: 'member' });
+  const otpInviteToken = secret(otpInvite.body.link.split('#')[1]);
+  const otpInvited = browser();
+  const otpInviteMail = inbox.length;
+  assert.equal((await otpInvited.post('/account/login-code', { email: otpInviteEmail, invitation: otpInviteToken })).status, 202);
+  const [, otpInviteCode] = await mail(otpInviteEmail, /^(\d{6})$/m, otpInviteMail);
+  assert.equal((await otpInvited.post('/account/login-verify', { code: otpInviteCode, invitation: otpInviteToken })).status, 204);
+  assert.equal((await otpInvited.post('/account/invitation/accept', { token: otpInviteToken })).body.org, team.id);
   assert.equal((await owner.post('/admin/api/registration', { policy: 'open' })).status, 200);
   passed('one invitation: a new address registers, verifies and joins the team; invite-only instances refuse everyone else');
 
   const closing = browser();
   const closingEmail = 'pending-close@example.test';
   await clearLimits();
+  const closingSignIn = browser();
+  const closingSignInEmail = 'pending-login-close@example.test';
+  assert.equal((await closingSignIn.post('/account/login-code', { email: closingSignInEmail })).status, 202);
+  const [, closingSignInCode] = await mail(closingSignInEmail, /^(\d{6})$/m);
   assert.equal((await closing.post('/account/register', { email: closingEmail })).status, 202);
   const [, closingCode] = await mail(closingEmail, /^(\d{6})$/m);
   assert.equal((await owner.post('/admin/api/registration', { policy: 'closed' })).body.registration, 'closed');
   assert.equal((await closing.get('/account/config')).body.registrationAvailable, false);
   assert.equal((await closing.post('/account/resend')).body.error, 'registration_unavailable');
   assert.equal((await closing.post('/account/verify', { email: closingEmail, code: closingCode })).body.error, 'registration_unavailable');
+  assert.equal((await closingSignIn.post('/account/login-verify', { code: closingSignInCode })).body.error, 'registration_unavailable');
+  await assert.rejects(getAccount(pool, closingSignInEmail), /Account does not exist/);
   assert.equal((await browser().post('/account/register', { email: closingEmail })).body.error, 'registration_unavailable');
   assert.equal((await browser().post('/account/login', { email: ownerEmail, password: ownerPassword })).status, 204);
+  const closedExisting = browser();
+  const closedExistingMail = inbox.length;
+  assert.equal((await closedExisting.post('/account/login-code', { email: ownerEmail })).status, 202);
+  const [, closedExistingCode] = await mail(ownerEmail, /^(\d{6})$/m, closedExistingMail);
+  assert.equal((await closedExisting.post('/account/login-verify', { code: closedExistingCode })).status, 204);
   assert.equal((await owner.post('/admin/api/registration', { policy: 'open' })).status, 200);
   assert.equal((await closing.get('/account/config')).body.registrationAvailable, true);
   assert.equal((await closing.get('/account/session')).status, 401);

@@ -304,13 +304,18 @@ function AllTeams() {
   </Panel>;
 }
 
-type Application = { id: string; name: string; homeUrl: string; enabled: boolean; createdAt: string };
+type Application = {
+  id: string; name: string; homeUrl: string; enabled: boolean; createdAt: string;
+  signInName: string | null; signInLogoUrl: string | null;
+};
 type Credentials = { client_id: string; client_secret: string };
 
 function Applications({ console: { overview, reload } }: { console: Console }) {
   const { t } = useApp();
   const task = useTask();
   const registering = useTask();
+  const brandingTask = useTask();
+  const [branding, setBranding] = useState<string>();
   const [issued, setIssued] = useState<Credentials & { fresh: boolean }>();
   const list = useLoad(() => call<{ applications: Application[] }>('/admin/api/applications'), 'applications');
   const path = (id: string, action: string) => `/admin/api/applications/${encodeURIComponent(id)}/${action}`;
@@ -331,6 +336,10 @@ function Applications({ console: { overview, reload } }: { console: Console }) {
             <p className="text-sm text-muted wrap-anywhere">{entry.id} · {entry.homeUrl}</p>
           </div>
           {overview.canWrite && <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="secondary" aria-expanded={branding === entry.id}
+              onPress={() => { brandingTask.setError(undefined); setBranding(branding === entry.id ? undefined : entry.id); }}>
+              {t('Sign-in branding', '登录页品牌')}
+            </Button>
             <Button size="sm" variant="secondary" isPending={task.pending === entry.id + ':status'} onPress={() => void task.run(entry.id + ':status', async () => {
               await call(path(entry.id, 'status'), { status: entry.enabled ? 'disabled' : 'enabled' });
               await list.reload();
@@ -340,6 +349,28 @@ function Applications({ console: { overview, reload } }: { console: Console }) {
                 setIssued({ ...await call<Credentials>(path(entry.id, 'rotate'), {}), fresh: false });
               })} />
           </div>}
+          {overview.canWrite && branding === entry.id && <Form className="grid w-full gap-3" validationBehavior="native" onSubmit={event => {
+            const field = readForm(event);
+            void brandingTask.run('save', async () => {
+              await call(path(entry.id, 'branding'), { signInName: field('signInName'), signInLogoUrl: field('signInLogoUrl') });
+              await list.reload();
+              setBranding(current => current === entry.id ? undefined : current);
+            });
+          }}>
+            <TaskFeedback task={brandingTask} />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <TextField name="signInName" defaultValue={entry.signInName ?? ''}>
+                <Label>{t('Name on sign-in page', '登录页显示名称')}</Label>
+                <Input className="w-full min-w-0" maxLength={80} autoComplete="off" />
+              </TextField>
+              <TextField name="signInLogoUrl" type="url" defaultValue={entry.signInLogoUrl ?? ''}>
+                <Label>{t('Logo URL (HTTPS)', 'Logo 地址（HTTPS）')}</Label>
+                <Input className="w-full min-w-0" autoComplete="off" />
+              </TextField>
+            </div>
+            <p className="text-sm text-muted">{t('Leave both fields empty to hide the application brand on the sign-in page.', '两项都留空时，登录页不显示应用品牌。')}</p>
+            <div><Button type="submit" size="sm" isPending={brandingTask.pending === 'save'}>{t('Save', '保存')}</Button></div>
+          </Form>}
         </li>)}
       </ul> : <Empty>{t('No applications are registered yet.', '还没有注册应用。')}</Empty>}</Loaded>
     </Panel>

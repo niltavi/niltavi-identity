@@ -1,9 +1,11 @@
-import { Button, Checkbox, FieldError, Form, Input, Label, Skeleton, TextField } from '@heroui/react';
+import { Button, Checkbox, FieldError, Form, Input, InputGroup, Label, Link, Skeleton, TextField } from '@heroui/react';
+import Envelope from '@gravity-ui/icons/Envelope';
+import CircleCheckFill from '@gravity-ui/icons/CircleCheckFill';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { RequestFailure, call, codeOf, forgetLinkToken, linkToken, problem } from './api';
 import type { AgentToken, Invitation } from './api';
-import { CodeField, CredentialsForm, Notice, PageLink, PasswordField, TaskFeedback, passwordLength, readForm, useApp, useTask } from './ui';
+import { AuthBack, AuthLayout, CodeField, CodeHelp, CredentialsForm, Notice, PageLink, PasswordField, SentTo, StepIndicator, TaskFeedback, passwordLength, readForm, useApp, useTask } from './ui';
 import type { Navigate, Route } from './site';
 import type { Language } from './site';
 
@@ -18,7 +20,6 @@ export function rememberReturn(route: Route) {
   catch { /* the account center is the fallback */ }
 }
 
-// Where a person lands after signing in: the invitation or page they came for, else the account center.
 export function arrive(language: Language, navigate: Navigate) {
   if (pendingInvitation()) return navigate({ language, section: 'invite' }, true);
   let back: Partial<Route> = {};
@@ -31,22 +32,30 @@ export function arrive(language: Language, navigate: Navigate) {
 }
 
 function Narrow({ title, children }: { title: string; children: ReactNode }) {
-  return <section className="niltavi-email-password">
-    <h1 className="text-balance text-2xl font-semibold tracking-tight">{title}</h1>
+  return <div className="nt-auth nt-fade-up">
+    <div className="nt-auth__head"><h3>{title}</h3></div>
     {children}
-  </section>;
+  </div>;
 }
 
 function Lines() {
-  return <div className="niltavi-email-password" aria-busy="true">
+  return <div className="nt-auth" aria-busy="true">
     <Skeleton className="h-7 w-2/3 rounded" /><Skeleton className="h-10 w-full rounded" /><Skeleton className="h-10 w-full rounded" />
   </div>;
 }
 
-export function SignIn() {
+type SignInInteraction = {
+  path: string;
+  passwordless: boolean;
+  registration: string | undefined;
+  initialError: string | undefined;
+};
+
+export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}) {
   const { t, language, settings, refresh } = useApp();
   const task = useTask();
-  const [mode, setMode] = useState<'password' | 'code'>('password');
+  const [chosenMode, setMode] = useState<'password' | 'code'>(interaction?.initialError ? 'password' : 'code');
+  const [initialError, setInitialError] = useState(interaction?.initialError);
   const [codeSentTo, setCodeSentTo] = useState<string>();
   const [codeError, setCodeError] = useState<string>();
   const [emailError, setEmailError] = useState<string>();
@@ -54,42 +63,70 @@ export function SignIn() {
   const [pwMessage, setPwMessage] = useState<string>();
   const [pwPending, setPwPending] = useState(false);
   const pwBusy = useRef(false);
-  const passwordless = settings?.passwordlessAvailable;
+  const passwordless = interaction?.passwordless ?? settings?.passwordlessAvailable;
+  const mode = passwordless ? chosenMode : 'password';
+  const invitation = interaction ? undefined : pendingInvitation();
+  const codeFields = invitation ? { invitation } : {};
+  const register = mode === 'password' && (interaction ? interaction.registration : settings?.registrationAvailable) &&
+    <PageLink to={{ section: 'register' }}>{t('Create an account', '注册')}</PageLink>;
 
-  function switchMode(next: 'password' | 'code') {
-    if (next === mode) return;
-    setMode(next);
+  function switchMode() {
+    setMode(m => m === 'code' ? 'password' : 'code');
     setCodeSentTo(undefined);
     setCodeError(undefined);
     setEmailError(undefined);
     setPwEmailError(undefined);
     setPwMessage(undefined);
+    setInitialError(undefined);
     task.setError(undefined);
+  }
+
+  async function submit(path: string, values: Record<string, string>) {
+    if (!interaction) {
+      await call(path, values);
+      if (path !== '/account/login-code') await refresh();
+      return;
+    }
+    try {
+      const { continueTo } = await call<{ continueTo?: string }>(interaction.path, values);
+      if (continueTo) window.location.assign(continueTo);
+    } catch (failure) {
+      if (codeOf(failure) === 'interaction_expired') window.location.reload();
+      throw failure;
+    }
+  }
+
+  function verifyCode(code: string) {
+    setCodeError(undefined);
+    void task.run('verify', async () => {
+      try { await submit('/account/login-verify', { code: code.trim(), ...codeFields }); }
+      catch (failure) {
+        if (codeOf(failure) !== 'invalid_code') throw failure;
+        setCodeError(problem(failure, language));
+      }
+    });
   }
 
   const step = mode === 'password' ? 'password' : codeSentTo ? 'verify' : 'email';
 
-  return <section className="niltavi-email-password">
-    <h1 className="text-balance text-2xl font-semibold tracking-tight">{t('Sign in', '登录')}</h1>
-    {passwordless && <div className="niltavi-auth-modes" role="tablist">
-      <button type="button" className="niltavi-auth-mode" role="tab" aria-selected={mode === 'password'}
-        onClick={() => switchMode('password')}>{t('Password', '密码登录')}</button>
-      <button type="button" className="niltavi-auth-mode" role="tab" aria-selected={mode === 'code'}
-        onClick={() => switchMode('code')}>{t('Verification code', '验证码登录')}</button>
-    </div>}
+  if (!interaction && !settings) return <Lines />;
+
+  return <div className="nt-auth nt-auth--signin nt-fade-up">
+    <h1 className="nt-auth__title">{t('Sign in', '登录')}</h1>
+    {initialError && <Notice status="danger">{problem(initialError, language)}</Notice>}
     {mode === 'code' && <TaskFeedback task={task} />}
-    <div key={step} className="nt-fade-up grid gap-4">
-      {step === 'password' && <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
+    <div key={step} className="nt-fade-up">
+      {step === 'password' && <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => {
         const field = readForm(event);
         if (pwBusy.current) return;
         pwBusy.current = true;
         setPwPending(true);
+        setInitialError(undefined);
         setPwEmailError(undefined);
         setPwMessage(undefined);
         void (async () => {
           try {
-            await call('/account/login', { email: field('email').trim(), password: field('password') });
-            await refresh();
+            await submit('/account/login', { email: field('email').trim(), password: field('password') });
           } catch (failure) {
             if (codeOf(failure) === 'invalid_email') setPwEmailError(problem(failure, language));
             else setPwMessage(problem(failure, language));
@@ -99,26 +136,24 @@ export function SignIn() {
           }
         })();
       }}>
-        <fieldset className="niltavi-email-password__fields">
-          <TextField name="email" type="email" autoComplete="username" isRequired isInvalid={Boolean(pwEmailError)} onChange={() => setPwEmailError(undefined)}>
-            <Label>{t('Email', '邮箱')}</Label>
-            <Input className="w-full min-w-0" />
-            <FieldError>{pwEmailError}</FieldError>
-          </TextField>
-          <TextField name="password" type="password" autoComplete="current-password" isRequired>
-            <Label>{t('Password', '密码')}</Label>
-            <Input className="w-full min-w-0" />
-          </TextField>
-          <Button type="submit" isPending={pwPending} className="w-full">{t('Sign in', '登录')}</Button>
-        </fieldset>
-        {pwMessage && <p role="alert">{pwMessage}</p>}
+        <TextField name="email" type="email" autoComplete="username" isRequired isInvalid={Boolean(pwEmailError)} onChange={() => setPwEmailError(undefined)}>
+          <Label>{t('Email', '邮箱')}</Label>
+          <InputGroup>
+            <InputGroup.Prefix><Envelope aria-hidden="true" width={14} height={14} /></InputGroup.Prefix>
+            <InputGroup.Input placeholder="you@example.com" />
+          </InputGroup>
+          <FieldError>{pwEmailError}</FieldError>
+        </TextField>
+        <PasswordField label={t('Password', '密码')} rule={{ minimum: 1, maximum: 256 }} error={pwMessage}
+          onInput={() => setPwMessage(undefined)} autoComplete="current-password" validateOnSubmit />
+        <Button type="submit" isPending={pwPending} className="w-full">{t('Sign in', '登录')}</Button>
       </Form>}
-      {step === 'email' && <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
+      {step === 'email' && <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => {
         const email = readForm(event)('email').trim();
         setEmailError(undefined);
         void task.run('send-code', async () => {
           try {
-            await call('/account/login-code', { email });
+            await submit('/account/login-code', { email, ...codeFields });
             setCodeSentTo(email);
           } catch (failure) {
             if (codeOf(failure) === 'invalid_email') setEmailError(problem(failure, language));
@@ -128,58 +163,60 @@ export function SignIn() {
       }}>
         <TextField name="email" type="email" autoComplete="username" isRequired isInvalid={Boolean(emailError)} onChange={() => setEmailError(undefined)}>
           <Label>{t('Email', '邮箱')}</Label>
-          <Input className="w-full min-w-0" />
+          <InputGroup>
+            <InputGroup.Prefix><Envelope aria-hidden="true" width={14} height={14} /></InputGroup.Prefix>
+            <InputGroup.Input placeholder="you@example.com" />
+          </InputGroup>
+          {emailError && <FieldError>{emailError}</FieldError>}
         </TextField>
-        {emailError && <p role="alert">{emailError}</p>}
-        <Button type="submit" className="w-full" isPending={task.pending === 'send-code'}>{t('Send verification code', '发送验证码')}</Button>
+        <Button type="submit" className="w-full" isPending={task.pending === 'send-code'}>{t('Send code', '获取验证码')}</Button>
       </Form>}
-      {step === 'verify' && <>
-        <p className="text-muted wrap-anywhere">{t(`We sent a 6-digit code to ${codeSentTo}. It is valid for 15 minutes.`, `我们向 ${codeSentTo} 发送了 6 位验证码，15 分钟内有效。`)}</p>
-        <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
-          const field = readForm(event);
-          setCodeError(undefined);
-          void task.run('verify', async () => {
-            try {
-              await call('/account/login-verify', { code: field('code').trim() });
-              await refresh();
-            } catch (failure) {
-              if (codeOf(failure) !== 'invalid_code') throw failure;
-              setCodeError(problem(failure, language));
-            }
-          });
-        }}>
-          <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)} />
-          <Button type="submit" className="w-full" isPending={task.pending === 'verify'}>{t('Sign in', '登录')}</Button>
-        </Form>
-        <Button variant="tertiary" size="sm" onPress={() => { setCodeSentTo(undefined); task.setError(undefined); }}>{t('Use a different email', '换一个邮箱')}</Button>
-      </>}
+      {step === 'verify' && <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => {
+        event.preventDefault();
+        const code = event.currentTarget.querySelector<HTMLInputElement>('.nt-auth__otp input')?.value;
+        if (code?.length === 6) verifyCode(code);
+      }}>
+        <SentTo label={t('Code sent to', '验证码已发送至')} value={codeSentTo!} onEdit={() => { setCodeSentTo(undefined); setCodeError(undefined); task.setError(undefined); }} />
+        <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)}
+          onComplete={verifyCode} />
+        <CodeHelp error={codeError} onResend={() => void task.run('resend', () =>
+          submit('/account/login-code', { email: codeSentTo!, ...codeFields }))} isPending={task.pending === 'resend'} />
+        <Button type="submit" className="w-full" isPending={task.pending === 'verify'}>{t('Sign in', '登录')}</Button>
+      </Form>}
     </div>
-    <div className="flex flex-wrap gap-x-5 gap-y-2">
-      {settings?.registrationAvailable && <PageLink to={{ section: 'register' }}>{t('Create an account', '创建账号')}</PageLink>}
-      <PageLink to={{ section: 'recover' }}>{t('Forgot password', '忘记密码')}</PageLink>
+    <div className="nt-auth__alt">
+      <p className="nt-auth__links">
+        {passwordless && <Link href="#" onClick={event => { event.preventDefault(); switchMode(); }}>{mode === 'code' ? t('Use password', '使用密码登录') : t('Use a code', '使用验证码登录')}</Link>}
+        {mode === 'password' && <>{passwordless && <span aria-hidden="true">·</span>}<PageLink to={{ section: 'recover' }}>{t('Forgot password?', '忘记密码')}</PageLink></>}
+      </p>
+      {register && <p className="nt-auth__links">{t('New here?', '还没有账号？')}{register}</p>}
     </div>
-  </section>;
+  </div>;
 }
 
 const continuation = /^\/interaction\/[A-Za-z0-9_-]{16,128}\/registered$/;
 
-export function Register() {
+export function Register({ interactionPath }: { interactionPath?: string } = {}) {
   const { t, language, settings, refresh } = useApp();
   const task = useTask();
   const [verifying, setVerifying] = useState<string>();
   const [invited, setInvited] = useState<Invitation | null>();
   const [codeError, setCodeError] = useState<string>();
-  const [emailError, setEmailError] = useState<string>();
   const invitation = pendingInvitation();
   const mode = settings?.registrationMode;
-  const passwordless = settings?.passwordlessAvailable;
+  const registerPath = interactionPath ? interactionPath + '/register' : '/account/register';
+  const enrollmentPath = interactionPath ? registerPath + '/enrollment' : '/account/enrollment';
+  const verifyPath = interactionPath ? registerPath : '/account/verify';
+  const resendPath = interactionPath ? registerPath : '/account/resend';
 
   useEffect(() => {
     if (mode !== 'verify-email') return;
     let current = true;
-    void call<{ email: string }>('/account/enrollment').then(({ email }) => { if (current) setVerifying(email); }, () => undefined);
+    void call<{ email: string }>(enrollmentPath).then(({ email }) => { if (current) setVerifying(email); }, error => {
+      if (current && codeOf(error) === 'interaction_expired') window.location.reload();
+    });
     return () => { current = false; };
-  }, [mode]);
+  }, [mode, enrollmentPath]);
 
   useEffect(() => {
     if (!invitation) return setInvited(null);
@@ -189,9 +226,19 @@ export function Register() {
     return () => { current = false; };
   }, [invitation]);
 
-  async function finish(continueTo: string | undefined) {
+  async function finish(continueTo: string | undefined, acceptInvitation = false) {
+    if (interactionPath && continueTo !== interactionPath + '/registered') throw new RequestFailure(409, 'interaction_expired');
     if (continueTo && continuation.test(continueTo)) return window.location.assign(continueTo);
+    if (acceptInvitation) await autoAcceptInvitation();
     await refresh();
+  }
+
+  async function request<T>(path: string, values: Record<string, string>) {
+    try { return await call<T>(path, values); }
+    catch (error) {
+      if (interactionPath && codeOf(error) === 'interaction_expired') window.location.reload();
+      throw error;
+    }
   }
 
   async function autoAcceptInvitation() {
@@ -205,12 +252,28 @@ export function Register() {
     return undefined;
   }
 
+  function verify(code: string) {
+    if (!verifying || code.length !== 6) return;
+    setCodeError(undefined);
+    void task.run('verify', async () => {
+      try {
+        const result = await request<{ continueTo?: string }>(verifyPath, { email: verifying, code });
+        await finish(result.continueTo, true);
+      } catch (failure) {
+        const c = codeOf(failure);
+        if (c === 'registration_unavailable' || c === 'invitation_required') setVerifying(undefined);
+        if (c !== 'invalid_code') throw failure;
+        setCodeError(problem(failure, language));
+      }
+    });
+  }
+
   const signIn = <PageLink to={{ section: 'login' }}>{t('Sign in instead', '已有账号？登录')}</PageLink>;
   if (!settings || invited === undefined) return <Lines />;
   if (!settings.registrationAvailable) {
     return <Narrow title={t('Create an account', '创建账号')}>
       <Notice status="default">{t('Registration is not open on this instance.', '此实例未开放注册。')}</Notice>
-      {signIn}
+      <p className="nt-auth__links">{signIn}</p>
     </Narrow>;
   }
   const inviteOnly = settings.registrationPolicy === 'invite';
@@ -218,90 +281,47 @@ export function Register() {
     return <Narrow title={t('Create an account', '创建账号')}>
       <Notice status="default">{t('This instance is invite-only. Open the invitation link you received to create an account.',
         '此实例仅限受邀注册。请打开你收到的邀请链接来创建账号。')}</Notice>
-      {signIn}
+      <p className="nt-auth__links">{signIn}</p>
     </Narrow>;
   }
 
   if (verifying) {
-    return <Narrow title={t('Check your email', '查收验证码')}>
-      <div className="nt-fade-up grid gap-4">
-        <p className="text-muted wrap-anywhere">{t(`We sent a 6-digit code to ${verifying}. It is valid for 15 minutes.`, `我们向 ${verifying} 发送了 6 位验证码，15 分钟内有效。`)}</p>
+    const steps = [t('Details', '填写信息'), t('Verify email', '验证邮箱')];
+    return <div className="nt-auth nt-fade-up">
+      <div className="nt-auth__top">
+        <AuthBack onPress={() => { setVerifying(undefined); task.setError(undefined); }} />
+        <StepIndicator steps={steps} current={1} />
+      </div>
+      <div className="nt-slide-end nt-auth__step">
+        <div className="nt-auth__head"><h3>{t('Check your email', '查收验证码')}</h3></div>
         <TaskFeedback task={task} />
-        <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
-          const field = readForm(event);
-          setCodeError(undefined);
-          void task.run('verify', async () => {
-            try {
-              const result = await call<{ continueTo?: string }>('/account/verify', { email: verifying, code: field('code').trim() });
-              if (result.continueTo && continuation.test(result.continueTo)) return window.location.assign(result.continueTo);
-              await autoAcceptInvitation();
-              await refresh();
-            } catch (failure) {
-              const code = codeOf(failure);
-              if (code === 'registration_unavailable' || code === 'invitation_required') setVerifying(undefined);
-              if (code !== 'invalid_code') throw failure;
-              setCodeError(problem(failure, language));
-            }
-          });
+        <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => {
+          event.preventDefault();
+          verify(event.currentTarget.querySelector<HTMLInputElement>('.nt-auth__otp input')?.value ?? '');
         }}>
-          <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)} />
-          <Button type="submit" className="w-full" isPending={task.pending === 'verify'}>{t('Verify and continue', '验证并继续')}</Button>
-        </Form>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="tertiary" size="sm" isPending={task.pending === 'resend'} onPress={() => void task.run('resend', async () => {
-            try { await call('/account/resend', {}); }
+          <SentTo label={t('Code sent to', '验证码已发送至')} value={verifying} onEdit={() => { setVerifying(undefined); task.setError(undefined); setCodeError(undefined); }} />
+          <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)}
+            onComplete={verify} />
+          <CodeHelp error={codeError} onResend={() => void task.run('resend', async () => {
+            try { await request(resendPath, {}); }
             catch (failure) {
               if (codeOf(failure) === 'enrollment_expired') setVerifying(undefined);
               throw failure;
             }
             return t('We sent a new code.', '新的验证码已发送。');
-          })}>{t('Send a new code', '重新发送')}</Button>
-          <Button variant="tertiary" size="sm" onPress={() => { setVerifying(undefined); task.setError(undefined); }}>{t('Use a different email', '换一个邮箱')}</Button>
-        </div>
+          })} isPending={task.pending === 'resend'} />
+          <Button type="submit" className="w-full" isPending={task.pending === 'verify'}>{t('Verify and continue', '验证并继续')}</Button>
+        </Form>
+        <p className="nt-auth__links nt-auth__foot">{signIn}</p>
       </div>
-    </Narrow>;
-  }
-
-  if (passwordless) {
-    return <Narrow title={t('Create an account', '创建账号')}>
-      {invited && <p className="text-sm text-muted wrap-anywhere">{t(`${invited.inviter} invited ${invited.email} to join ${invited.team}.`,
-        `${invited.inviter} 邀请 ${invited.email} 加入 ${invited.team}。`)}</p>}
-      {settings.registrationDomain && <p className="text-sm text-muted">{t(`Use an address at @${settings.registrationDomain}.`, `请使用 @${settings.registrationDomain} 的邮箱。`)}</p>}
-      <TaskFeedback task={task} />
-      <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
-        const email = readForm(event)('email').trim();
-        setEmailError(undefined);
-        void task.run('register', async () => {
-          try {
-            const result = await call<{ created?: true; continueTo?: string }>('/account/register',
-              { email, ...(invited && invitation ? { invitation } : {}) });
-            if (result.created) await finish(result.continueTo);
-            else setVerifying(email);
-          } catch (failure) {
-            const code = codeOf(failure);
-            if (code === 'invalid_email' || code === 'registration_domain' || code === 'email_in_use' || code === 'invitation_required') {
-              setEmailError(problem(failure, language));
-            } else throw failure;
-          }
-        });
-      }}>
-        <TextField name="email" type="email" autoComplete="email" isRequired {...(invited?.email ? { defaultValue: invited.email } : {})}
-          isInvalid={Boolean(emailError)} onChange={() => setEmailError(undefined)}>
-          <Label>{t('Email', '邮箱')}</Label>
-          <Input className="w-full min-w-0" />
-        </TextField>
-        {emailError && <p role="alert">{emailError}</p>}
-        <Button type="submit" className="w-full" isPending={task.pending === 'register'}>{t('Send verification code', '发送验证码')}</Button>
-      </Form>
-      <div className="flex flex-wrap gap-x-5 gap-y-2">{signIn}</div>
-    </Narrow>;
+    </div>;
   }
 
   return <CredentialsForm mode="register" title={t('Create an account', '创建账号')} submit={t('Create account', '创建账号')}
     rule={settings.passwordRule} defaultEmail={invited?.email} validateOnSubmit
     onSubmit={async (email, password) => {
       try {
-        const result = await call<{ created?: true; continueTo?: string }>('/account/register',
+        const result = await request<{ created?: true; continueTo?: string }>(registerPath,
           { email, password, ...(invited && invitation ? { invitation } : {}) });
         if (result.created) await finish(result.continueTo);
         else setVerifying(email);
@@ -332,21 +352,26 @@ export function Recover() {
     return <Narrow title={t('Reset your password', '重置密码')}>
       <Notice status="default">{t('This instance cannot send mail. Ask its administrator for a password reset link.',
         '此实例无法发送邮件。请联系管理员为你生成密码重置链接。')}</Notice>
-      {back}
+      <p className="nt-auth__links">{back}</p>
     </Narrow>;
   }
   if (sentTo) {
-    return <Narrow title={t('Check your email', '查收邮件')}>
-      <div className="nt-fade-up grid gap-4">
-        <p className="wrap-anywhere" role="status">{t(`If ${sentTo} has an account with a verified address, we sent it a link to choose a new password. The link works for 30 minutes.`,
-          `如果 ${sentTo} 对应一个邮箱已验证的账号，我们已向它发送了重置密码的链接，30 分钟内有效。`)}</p>
+    return <div className="nt-auth nt-fade-up">
+      <div className="nt-auth__done">
+        <CircleCheckFill aria-hidden="true" width={40} height={40} className="nt-pop" />
+        <div className="nt-auth__head">
+          <h3>{t('Check your email', '查收邮件')}</h3>
+          <p>{t(`If ${sentTo} has an account with a verified address, we sent it a link to choose a new password. The link works for 30 minutes.`,
+            `如果 ${sentTo} 对应一个邮箱已验证的账号，我们已向它发送了重置密码的链接，30 分钟内有效。`)}</p>
+        </div>
         {back}
       </div>
-    </Narrow>;
+    </div>;
   }
-  return <Narrow title={t('Reset your password', '重置密码')}>
+  return <div className="nt-auth nt-fade-up">
+    <div className="nt-auth__head"><h3>{t('Reset your password', '重置密码')}</h3></div>
     <TaskFeedback task={task} />
-    <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
+    <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => {
       const email = readForm(event)('email').trim();
       setEmailError(undefined);
       void task.run('recover', async () => {
@@ -361,13 +386,16 @@ export function Recover() {
     }}>
       <TextField name="email" type="email" autoComplete="username" isRequired isInvalid={Boolean(emailError)} onChange={() => setEmailError(undefined)}>
         <Label>{t('Email', '邮箱')}</Label>
-        <Input className="w-full min-w-0" />
+        <InputGroup>
+          <InputGroup.Prefix><Envelope aria-hidden="true" width={14} height={14} /></InputGroup.Prefix>
+          <InputGroup.Input placeholder="you@example.com" />
+        </InputGroup>
+        {emailError && <FieldError>{emailError}</FieldError>}
       </TextField>
-      {emailError && <p role="alert">{emailError}</p>}
       <Button type="submit" className="w-full" isPending={task.pending === 'recover'}>{t('Send reset link', '发送重置链接')}</Button>
     </Form>
-    {back}
-  </Narrow>;
+    <p className="nt-auth__links">{back}</p>
+  </div>;
 }
 
 export function Reset() {
@@ -381,8 +409,14 @@ export function Reset() {
   const rule = settings?.passwordRule ?? { minimum: 12, maximum: 256 };
 
   if (tokens) {
-    return <Narrow title={t('Password changed', '密码已修改')}>
-      <p role="status">{t('You are signed in here. Every other device was signed out.', '你已在此浏览器登录，其他设备均已退出。')}</p>
+    return <div className="nt-auth nt-fade-up">
+      <div className="nt-auth__done">
+        <CircleCheckFill aria-hidden="true" width={40} height={40} className="nt-pop" />
+        <div className="nt-auth__head">
+          <h3>{t('Password changed', '密码已修改')}</h3>
+          <p>{t('You are signed in here. Every other device was signed out.', '你已在此浏览器登录，其他设备均已退出。')}</p>
+        </div>
+      </div>
       <TaskFeedback task={task} />
       {tokens.length > 0 && <>
         <p className="text-sm text-muted">{t('These agent tokens still work. Revoke any you do not recognize.', '以下 Agent 令牌仍然有效。如有不认识的，请撤销。')}</p>
@@ -402,17 +436,18 @@ export function Reset() {
         })}>{t('Revoke selected', '撤销所选令牌')}</Button>
       </>}
       <PageLink to={{ section: 'workspace' }}>{t('Continue to your account', '前往账号中心')}</PageLink>
-    </Narrow>;
+    </div>;
   }
   if (invalid) {
     return <Narrow title={t('This link no longer works', '链接已失效')}>
       <Notice status="danger">{t('The reset link is invalid, expired, or already used.', '重置链接无效、已过期或已使用。')}</Notice>
-      <PageLink to={{ section: 'recover' }}>{t('Request a new link', '重新获取链接')}</PageLink>
+      <p className="nt-auth__links"><PageLink to={{ section: 'recover' }}>{t('Request a new link', '重新获取链接')}</PageLink></p>
     </Narrow>;
   }
-  return <Narrow title={t('Choose a new password', '设置新密码')}>
+  return <div className="nt-auth nt-fade-up">
+    <div className="nt-auth__head"><h3>{t('Choose a new password', '设置新密码')}</h3></div>
     <TaskFeedback task={task} />
-    <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
+    <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => {
       const password = readForm(event)('password');
       if (passwordLength(password) < rule.minimum || passwordLength(password) > rule.maximum) return setPasswordError(problem('invalid_password', language));
       void task.run('reset', async () => {
@@ -434,7 +469,7 @@ export function Reset() {
       <PasswordField label={t('New password', '新密码')} rule={rule} error={passwordError} onInput={() => setPasswordError(undefined)} />
       <Button type="submit" className="w-full" isPending={task.pending === 'reset'}>{t('Change password', '修改密码')}</Button>
     </Form>
-  </Narrow>;
+  </div>;
 }
 
 export function VerifyEmail() {
@@ -458,17 +493,24 @@ export function VerifyEmail() {
   }, [refresh]);
   if (state === 'checking') return <Lines />;
   if (state === 'verified') {
-    return <Narrow title={t('Email verified', '邮箱已验证')}>
-      <p role="status">{t('Your email address is confirmed.', '你的邮箱地址已确认。')}</p>
-      {pendingInvitation() ? <PageLink to={{ section: 'invite' }}>{t('Continue to your invitation', '继续处理邀请')}</PageLink>
-        : account ? <PageLink to={{ section: 'workspace' }}>{t('Go to your account', '前往账号中心')}</PageLink>
-        : <PageLink to={{ section: 'login' }}>{t('Sign in', '登录')}</PageLink>}
-    </Narrow>;
+    return <div className="nt-auth nt-fade-up">
+      <div className="nt-auth__done">
+        <CircleCheckFill aria-hidden="true" width={40} height={40} className="nt-pop" />
+        <div className="nt-auth__head"><h3>{t('Email verified', '邮箱已验证')}</h3><p>{t('Your email address is confirmed.', '你的邮箱地址已确认。')}</p></div>
+      </div>
+      <p className="nt-auth__links">
+        {pendingInvitation() ? <PageLink to={{ section: 'invite' }}>{t('Continue to your invitation', '继续处理邀请')}</PageLink>
+          : account ? <PageLink to={{ section: 'workspace' }}>{t('Go to your account', '前往账号中心')}</PageLink>
+          : <PageLink to={{ section: 'login' }}>{t('Sign in', '登录')}</PageLink>}
+      </p>
+    </div>;
   }
   return <Narrow title={t('This link no longer works', '链接已失效')}>
     <Notice status="danger">{state === 'invalid' ? t('The verification link is invalid, expired, or already used.', '验证链接无效、已过期或已使用。') : problem(state, language)}</Notice>
-    {account ? <PageLink to={{ section: 'workspace' }}>{t('Send a new link from your account', '在账号中心重新发送')}</PageLink>
-      : <PageLink to={{ section: 'login' }}>{t('Sign in to send a new link', '登录后重新发送')}</PageLink>}
+    <p className="nt-auth__links">
+      {account ? <PageLink to={{ section: 'workspace' }}>{t('Send a new link from your account', '在账号中心重新发送')}</PageLink>
+        : <PageLink to={{ section: 'login' }}>{t('Sign in to send a new link', '登录后重新发送')}</PageLink>}
+    </p>
   </Narrow>;
 }
 
@@ -490,7 +532,6 @@ export function Invite() {
     return () => { current = false; };
   }, [token]);
 
-  // Auto-accept when the user is signed in with a verified email and the invitation is pending.
   useEffect(() => {
     if (!account || !invitation || invitation.state !== 'pending' || autoAccepting.current) return;
     if (account.email !== invitation.email || !account.emailVerified) return;
@@ -519,8 +560,10 @@ export function Invite() {
         : invitation?.state === 'revoked' ? t('This invitation was withdrawn. Ask the team for a new one.', '此邀请已被撤回，请联系团队重新邀请。')
         : invitation?.state === 'expired' ? t('This invitation has expired. Ask the team for a new one.', '此邀请已过期，请联系团队重新邀请。')
         : t('This invitation link is not valid.', '邀请链接无效。')}</Notice>
-      {account ? <PageLink to={{ section: 'workspace', tab: 'teams' }} onClick={() => forgetLinkToken('invite')}>{t('Go to your teams', '前往我的团队')}</PageLink>
-        : <PageLink to={{ section: 'login' }} onClick={() => forgetLinkToken('invite')}>{t('Sign in', '登录')}</PageLink>}
+      <p className="nt-auth__links">
+        {account ? <PageLink to={{ section: 'workspace', tab: 'teams' }} onClick={() => forgetLinkToken('invite')}>{t('Go to your teams', '前往我的团队')}</PageLink>
+          : <PageLink to={{ section: 'login' }} onClick={() => forgetLinkToken('invite')}>{t('Sign in', '登录')}</PageLink>}
+      </p>
     </Narrow>;
   }
   const summary = <p className="wrap-anywhere">{t(`${invitation.inviter} invited ${invitation.email} to join ${invitation.team} as ${roles[invitation.role]}.`,
@@ -529,10 +572,13 @@ export function Invite() {
   if (!account) {
     return <Narrow title={title}>
       {summary}
-      <p className="text-sm text-muted">{t('Sign in or create an account with that email address to accept.', '请使用该邮箱登录或创建账号后接受邀请。')}</p>
+      <p className="text-sm text-muted">{settings?.passwordlessAvailable
+        ? t('Use a code sent to that email address to accept.', '请使用该邮箱接收验证码并接受邀请。')
+        : t('Sign in or create an account with that email address to accept.', '请使用该邮箱登录或创建账号后接受邀请。')}</p>
       <div className="grid gap-2">
         <Button className="w-full" onPress={() => navigate({ language, section: 'login' })}>{t('Sign in', '登录')}</Button>
-        {settings?.registrationAvailable && <Button className="w-full" variant="secondary" onPress={() => navigate({ language, section: 'register' })}>{t('Create an account', '创建账号')}</Button>}
+        {settings?.registrationAvailable && !settings.passwordlessAvailable &&
+          <Button className="w-full" variant="secondary" onPress={() => navigate({ language, section: 'register' })}>{t('Create an account', '创建账号')}</Button>}
       </div>
     </Narrow>;
   }
@@ -555,27 +601,41 @@ export function Invite() {
       <TaskFeedback task={task} />
       {canSendCode ? <>
         {verifyCodeSent ? <>
-          <p className="text-muted wrap-anywhere">{t(`We sent a 6-digit code to ${account.email}.`, `我们向 ${account.email} 发送了 6 位验证码。`)}</p>
-          <Form className="niltavi-email-password__form" validationBehavior="native" onSubmit={event => {
-            const field = readForm(event);
-            setCodeError(undefined);
-            void task.run('verify-code', async () => {
-              try {
-                await call('/account/email/verify-code', { code: field('code').trim() });
-                await refresh();
-              } catch (failure) {
-                if (codeOf(failure) !== 'invalid_code') throw failure;
-                setCodeError(problem(failure, language));
-              }
-            });
-          }}>
-            <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)} />
-            <Button type="submit" className="w-full" isPending={task.pending === 'verify-code'}>{t('Verify and join', '验证并加入')}</Button>
+          <SentTo label={t('Code sent to', '验证码已发送至')} value={account.email} onEdit={() => { setVerifyCodeSent(false); setCodeError(undefined); }} />
+          <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => { event.preventDefault(); }}>
+            <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)}
+              onComplete={code => {
+                setCodeError(undefined);
+                void task.run('verify-code', async () => {
+                  try {
+                    await call('/account/email/verify-code', { code: code.trim() });
+                    await refresh();
+                  } catch (failure) {
+                    if (codeOf(failure) !== 'invalid_code') throw failure;
+                    setCodeError(problem(failure, language));
+                  }
+                });
+              }} />
+            <CodeHelp error={codeError} onResend={() => void task.run('resend-code', async () => {
+              await call('/account/email/resend-code', {});
+              return t('We sent a new code.', '新的验证码已发送。');
+            })} isPending={task.pending === 'resend-code'} />
+            <Button type="button" className="w-full" isPending={task.pending === 'verify-code'} onPress={() => {
+              const input = document.querySelector<HTMLInputElement>('.nt-auth__otp input');
+              const code = input?.value ?? '';
+              if (code.length < 6) return;
+              setCodeError(undefined);
+              void task.run('verify-code', async () => {
+                try {
+                  await call('/account/email/verify-code', { code: code.trim() });
+                  await refresh();
+                } catch (failure) {
+                  if (codeOf(failure) !== 'invalid_code') throw failure;
+                  setCodeError(problem(failure, language));
+                }
+              });
+            }}>{t('Verify and join', '验证并加入')}</Button>
           </Form>
-          <Button variant="tertiary" size="sm" isPending={task.pending === 'resend-code'} onPress={() => void task.run('resend-code', async () => {
-            await call('/account/email/resend-code', {});
-            return t('We sent a new code.', '新的验证码已发送。');
-          })}>{t('Send a new code', '重新发送')}</Button>
         </> : <Button className="w-full" isPending={task.pending === 'send-code'} onPress={() => void task.run('send-code', async () => {
           await call('/account/email/verification-code', {});
           setVerifyCodeSent(true);
@@ -593,7 +653,6 @@ export function Invite() {
       </>}
     </Narrow>;
   }
-  // Email is verified — auto-accept is running (or failed and fell through). Show manual accept button.
   return <Narrow title={title}>
     {summary}
     <TaskFeedback task={task} />
