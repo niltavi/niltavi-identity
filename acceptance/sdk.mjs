@@ -288,9 +288,10 @@ try {
   const newcomer = new Browser();
   visit = await newcomer.go(a.origin + a.deep);
   assert.match(new URL(visit.final.url).pathname, /^\/interaction\/[\w-]+$/);
-  const register = await newcomer.request(`${visit.final.url}/register`);
-  assert.equal(register.status, 303);
-  const created = await newcomer.account('/account/register', { email: 'nell@harbour.example.test', password: password() });
+  const registrationPath = new URL(visit.final.url).pathname + '/register';
+  const register = await newcomer.request(issuer + registrationPath);
+  assert.ok(register.status === 200 || register.status === 303);
+  const created = await newcomer.account(registrationPath, { email: 'nell@harbour.example.test', password: password() });
   assert.equal(created.status, 201);
   assert.match(created.data.continueTo, /^\/interaction\/[\w-]+\/registered$/);
   visit = await newcomer.go(issuer + created.data.continueTo);

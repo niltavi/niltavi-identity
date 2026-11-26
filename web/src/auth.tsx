@@ -65,9 +65,8 @@ export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}
   const pwBusy = useRef(false);
   const passwordless = interaction?.passwordless ?? settings?.passwordlessAvailable;
   const mode = passwordless ? chosenMode : 'password';
-  const register = interaction
-    ? interaction.registration && <Link href={interaction.registration}>{t('Create an account', '注册')}</Link>
-    : settings?.registrationAvailable && <PageLink to={{ section: 'register' }}>{t('Create an account', '注册')}</PageLink>;
+  const register = (interaction ? interaction.registration : settings?.registrationAvailable) &&
+    <PageLink to={{ section: 'register' }}>{t('Create an account', '注册')}</PageLink>;
 
   function switchMode() {
     setMode(m => m === 'code' ? 'password' : 'code');
@@ -195,7 +194,7 @@ export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}
 
 const continuation = /^\/interaction\/[A-Za-z0-9_-]{16,128}\/registered$/;
 
-export function Register() {
+export function Register({ interactionPath }: { interactionPath?: string } = {}) {
   const { t, language, settings, refresh } = useApp();
   const task = useTask();
   const [verifying, setVerifying] = useState<string>();
@@ -205,13 +204,19 @@ export function Register() {
   const invitation = pendingInvitation();
   const mode = settings?.registrationMode;
   const passwordless = settings?.passwordlessAvailable;
+  const registerPath = interactionPath ? interactionPath + '/register' : '/account/register';
+  const enrollmentPath = interactionPath ? registerPath + '/enrollment' : '/account/enrollment';
+  const verifyPath = interactionPath ? registerPath : '/account/verify';
+  const resendPath = interactionPath ? registerPath : '/account/resend';
 
   useEffect(() => {
     if (mode !== 'verify-email') return;
     let current = true;
-    void call<{ email: string }>('/account/enrollment').then(({ email }) => { if (current) setVerifying(email); }, () => undefined);
+    void call<{ email: string }>(enrollmentPath).then(({ email }) => { if (current) setVerifying(email); }, error => {
+      if (current && codeOf(error) === 'interaction_expired') window.location.reload();
+    });
     return () => { current = false; };
-  }, [mode]);
+  }, [mode, enrollmentPath]);
 
   useEffect(() => {
     if (!invitation) return setInvited(null);
@@ -221,9 +226,19 @@ export function Register() {
     return () => { current = false; };
   }, [invitation]);
 
-  async function finish(continueTo: string | undefined) {
+  async function finish(continueTo: string | undefined, acceptInvitation = false) {
+    if (interactionPath && continueTo !== interactionPath + '/registered') throw new RequestFailure(409, 'interaction_expired');
     if (continueTo && continuation.test(continueTo)) return window.location.assign(continueTo);
+    if (acceptInvitation) await autoAcceptInvitation();
     await refresh();
+  }
+
+  async function request<T>(path: string, values: Record<string, string>) {
+    try { return await call<T>(path, values); }
+    catch (error) {
+      if (interactionPath && codeOf(error) === 'interaction_expired') window.location.reload();
+      throw error;
+    }
   }
 
   async function autoAcceptInvitation() {
@@ -235,6 +250,22 @@ export function Register() {
       return joined.org;
     } catch { /* invitation may have been consumed or expired; fall through to arrive() */ }
     return undefined;
+  }
+
+  function verify(code: string) {
+    if (!verifying || code.length !== 6) return;
+    setCodeError(undefined);
+    void task.run('verify', async () => {
+      try {
+        const result = await request<{ continueTo?: string }>(verifyPath, { email: verifying, code });
+        await finish(result.continueTo, true);
+      } catch (failure) {
+        const c = codeOf(failure);
+        if (c === 'registration_unavailable' || c === 'invitation_required') setVerifying(undefined);
+        if (c !== 'invalid_code') throw failure;
+        setCodeError(problem(failure, language));
+      }
+    });
   }
 
   const signIn = <PageLink to={{ section: 'login' }}>{t('Sign in instead', '已有账号？登录')}</PageLink>;
@@ -264,53 +295,24 @@ export function Register() {
       <div className="nt-slide-end nt-auth__step">
         <div className="nt-auth__head"><h3>{t('Check your email', '查收验证码')}</h3></div>
         <TaskFeedback task={task} />
-        <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => { event.preventDefault(); }}>
+        <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => {
+          event.preventDefault();
+          verify(event.currentTarget.querySelector<HTMLInputElement>('.nt-auth__otp input')?.value ?? '');
+        }}>
           <SentTo label={t('Code sent to', '验证码已发送至')} value={verifying} onEdit={() => { setVerifying(undefined); task.setError(undefined); setCodeError(undefined); }} />
           <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)}
-            onComplete={code => {
-              setCodeError(undefined);
-              void task.run('verify', async () => {
-                try {
-                  const result = await call<{ continueTo?: string }>('/account/verify', { email: verifying, code: code.trim() });
-                  if (result.continueTo && continuation.test(result.continueTo)) return window.location.assign(result.continueTo);
-                  await autoAcceptInvitation();
-                  await refresh();
-                } catch (failure) {
-                  const c = codeOf(failure);
-                  if (c === 'registration_unavailable' || c === 'invitation_required') setVerifying(undefined);
-                  if (c !== 'invalid_code') throw failure;
-                  setCodeError(problem(failure, language));
-                }
-              });
-            }} />
+            onComplete={verify} />
           <CodeHelp error={codeError} onResend={() => void task.run('resend', async () => {
-            try { await call('/account/resend', {}); }
+            try { await request(resendPath, {}); }
             catch (failure) {
               if (codeOf(failure) === 'enrollment_expired') setVerifying(undefined);
               throw failure;
             }
             return t('We sent a new code.', '新的验证码已发送。');
           })} isPending={task.pending === 'resend'} />
-          <Button type="button" className="w-full" isPending={task.pending === 'verify'} onPress={() => {
-            const input = document.querySelector<HTMLInputElement>('.nt-auth__otp input');
-            const code = input?.value ?? '';
-            if (code.length < 6) return;
-            setCodeError(undefined);
-            void task.run('verify', async () => {
-              try {
-                const result = await call<{ continueTo?: string }>('/account/verify', { email: verifying, code: code.trim() });
-                if (result.continueTo && continuation.test(result.continueTo)) return window.location.assign(result.continueTo);
-                await autoAcceptInvitation();
-                await refresh();
-              } catch (failure) {
-                const c = codeOf(failure);
-                if (c === 'registration_unavailable' || c === 'invitation_required') setVerifying(undefined);
-                if (c !== 'invalid_code') throw failure;
-                setCodeError(problem(failure, language));
-              }
-            });
-          }}>{t('Verify and continue', '验证并继续')}</Button>
+          <Button type="submit" className="w-full" isPending={task.pending === 'verify'}>{t('Verify and continue', '验证并继续')}</Button>
         </Form>
+        <p className="nt-auth__links nt-auth__foot">{signIn}</p>
       </div>
     </div>;
   }
@@ -327,7 +329,7 @@ export function Register() {
         setEmailError(undefined);
         void task.run('register', async () => {
           try {
-            const result = await call<{ created?: true; continueTo?: string }>('/account/register',
+            const result = await request<{ created?: true; continueTo?: string }>(registerPath,
               { email, ...(invited && invitation ? { invitation } : {}) });
             if (result.created) await finish(result.continueTo);
             else setVerifying(email);
@@ -358,7 +360,7 @@ export function Register() {
     rule={settings.passwordRule} defaultEmail={invited?.email} validateOnSubmit
     onSubmit={async (email, password) => {
       try {
-        const result = await call<{ created?: true; continueTo?: string }>('/account/register',
+        const result = await request<{ created?: true; continueTo?: string }>(registerPath,
           { email, password, ...(invited && invitation ? { invitation } : {}) });
         if (result.created) await finish(result.continueTo);
         else setVerifying(email);
@@ -401,7 +403,7 @@ export function Recover() {
           <p>{t(`If ${sentTo} has an account with a verified address, we sent it a link to choose a new password. The link works for 30 minutes.`,
             `如果 ${sentTo} 对应一个邮箱已验证的账号，我们已向它发送了重置密码的链接，30 分钟内有效。`)}</p>
         </div>
-        <Button variant="secondary" className="w-full" onPress={() => setSentTo(undefined)}>{back}</Button>
+        {back}
       </div>
     </div>;
   }

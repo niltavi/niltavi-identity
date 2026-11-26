@@ -12,7 +12,7 @@ import { mailAddress, messages } from './mail.js';
 import type { Mailer } from './mail.js';
 import type { Notifier } from './notify.js';
 import type { ProtocolStore } from './protocol-store.js';
-import { intentDigest } from './registration-intent.js';
+import { beginRegistrationIntent, intentDigest } from './registration-intent.js';
 import { registerNewAccount, registrationPolicy, registrationRefusal } from './registration.js';
 import { failure, fields, requestLanguage } from './web-session.js';
 import type { WebSessions } from './web-session.js';
@@ -47,6 +47,8 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
   }
   if (allowedDomain) mailAddress(`mail@${allowedDomain}`);
   const mailLanguage = requestLanguage;
+  const enrollmentCookieFor = (uid?: string) => uid ? `${enrollmentCookie}-${uid}` : enrollmentCookie;
+  const enrollmentKey = (token: string, uid?: string) => web.keyFor(uid ? token + '\0' + uid : token);
   app.get('/account/config', async () => {
     const [ready, codes, general, policy, applications] = await Promise.all([
       getSetting<boolean>(pool, 'initialized'), mailer.codes(), mailer.general(), registrationPolicy(pool),
@@ -75,8 +77,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
 
   // Binds a completed registration to the authorization request that started it, so the
   // browser returns to the application without another sign-in.
-  async function continuation(db: PoolClient, request: FastifyRequest, account: string, expected?: string | null) {
-    const active = intentDigest(request, realm);
+  async function continuation(db: PoolClient, active: string | undefined, account: string, expected?: string | null) {
     if (!active || (expected !== undefined && expected !== active)) return {};
     const intent = (await db.query<{ interaction_uid: string }>(
       `UPDATE registration_intents SET account_id = $1, account_epoch = 0
@@ -84,7 +85,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     return intent ? { continueTo: '/interaction/' + intent.interaction_uid + '/registered' } : {};
   }
 
-  app.post('/account/register', guard, async (request, reply) => {
+  async function registerAccount(request: FastifyRequest, reply: FastifyReply, uid?: string) {
     if (!registrationEnabled) return failure(reply, 503, 'registration_unavailable');
     const passwordless = !testenvSignup && await mailer.codes();
     const withPassword = fields(request, 'email', 'password', 'invitation') ?? fields(request, 'email', 'password');
@@ -104,13 +105,14 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       try { hash = await passwordHash(rawPassword, email); }
       catch (error) { return failure(reply, 400, passwordFailure(error)); }
     }
+    const activeIntent = uid ? await beginRegistrationIntent(pool, reply, uid, realm, true) : intentDigest(request, realm);
     if (!passwordless) {
       const created = await transaction(pool, async (db) => {
         const account = await registerNewAccount(db, email, hash, false, invitationDigest);
         if (account.error) return { error: account.error };
         const { id } = account;
         await audit(db, testenvSignup ? 'account.testenv_registered' : 'account.registered', id, id);
-        return { token: await web.issue(db, id, 0, request), body: { created: true, emailVerified: false, ...await continuation(db, request, id) } };
+        return { token: await web.issue(db, id, 0, request), body: { created: true, emailVerified: false, ...await continuation(db, activeIntent, id) } };
       });
       if (created.error) return failure(reply, created.error === 'email_in_use' ? 409 : 403, created.error);
       web.grant(reply, created.token);
@@ -123,33 +125,33 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       (token_digest, email, expires_at, enrollment_digest, password_hash, next_resend_at, intent_digest, invitation_digest)
       VALUES ($1, $2, now() + $3 * interval '1 second', $4, $5, now() + $6 * interval '1 second',
         (SELECT token_digest FROM registration_intents WHERE token_digest = $7 AND expires_at > now() AND account_id IS NULL), $8)`,
-    [codeKey(enrollment, code), email, enrollmentSeconds, web.keyFor(enrollment), hash, resendSeconds,
-      intentDigest(request, realm) ?? null, invitationDigest]);
+    [codeKey(enrollment, code), email, enrollmentSeconds, enrollmentKey(enrollment, uid), hash, resendSeconds,
+      activeIntent ?? null, invitationDigest]);
     const language = mailLanguage(request);
     mailer.later(async () => {
       if (await getLogin(pool, email)) {
         if (await mailer.general()) await mailer.send(email, messages.existing(issuer.origin, language));
       } else await mailer.sendCode(email, code, language);
     });
-    setBrowserCookie(reply, enrollmentCookie, enrollment, enrollmentSeconds);
+    setBrowserCookie(reply, enrollmentCookieFor(uid), enrollment, enrollmentSeconds);
     return reply.code(202).send({ accepted: true });
-  });
+  }
 
-  app.get('/account/enrollment', async (request, reply) => {
-    const enrollment = readBrowserCookie(request, enrollmentCookie);
+  async function pendingEnrollment(request: FastifyRequest, reply: FastifyReply, uid?: string) {
+    const enrollment = readBrowserCookie(request, enrollmentCookieFor(uid));
     if (!enrollment) return failure(reply, 404, 'enrollment_expired');
     const pending = (await pool.query<{ email: string; expiresAt: Date }>(
       'SELECT email, expires_at AS "expiresAt" FROM email_registrations WHERE enrollment_digest = $1 AND expires_at > now()',
-      [web.keyFor(enrollment)])).rows[0];
+      [enrollmentKey(enrollment, uid)])).rows[0];
     return pending ?? failure(reply, 404, 'enrollment_expired');
-  });
+  }
 
-  app.post('/account/resend', guard, async (request, reply) => {
+  async function resendEnrollment(request: FastifyRequest, reply: FastifyReply, uid?: string) {
     if (!registrationEnabled || !await mailer.codes()) return failure(reply, 503, 'registration_unavailable');
     if (!fields(request)) return failure(reply, 400, 'unexpected_body');
-    const enrollment = readBrowserCookie(request, enrollmentCookie);
+    const enrollment = readBrowserCookie(request, enrollmentCookieFor(uid));
     if (!enrollment) return failure(reply, 404, 'enrollment_expired');
-    const key = web.keyFor(enrollment);
+    const key = enrollmentKey(enrollment, uid);
     const current = (await pool.query<{ email: string; invitation_digest: string | null }>(
       'SELECT email, invitation_digest FROM email_registrations WHERE enrollment_digest = $1 AND expires_at > now()', [key])).rows[0];
     if (!current) return failure(reply, 404, 'enrollment_expired');
@@ -166,43 +168,49 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     if (!changed.rowCount) return failure(reply.header('retry-after', String(resendSeconds)), 429, 'resend_wait');
     const language = mailLanguage(request);
     mailer.later(async () => { if (!await getLogin(pool, email)) await mailer.sendCode(email, code, language); });
-    setBrowserCookie(reply, enrollmentCookie, enrollment, enrollmentSeconds);
+    setBrowserCookie(reply, enrollmentCookieFor(uid), enrollment, enrollmentSeconds);
     return reply.code(202).send({ accepted: true });
-  });
+  }
 
-  app.post('/account/verify', guard, async (request, reply) => {
+  async function verifyEnrollment(request: FastifyRequest, reply: FastifyReply, uid?: string) {
     if (!registrationEnabled) return failure(reply, 503, 'registration_unavailable');
     const submitted = fields(request, 'email', 'code');
     let email: string;
     try { email = mailAddress(submitted?.[0] ?? ''); }
     catch { return failure(reply, 400, 'invalid_email'); }
     const [, code] = submitted ?? [];
-    const enrollment = readBrowserCookie(request, enrollmentCookie);
+    const enrollment = readBrowserCookie(request, enrollmentCookieFor(uid));
     if (!enrollment || !code || !/^\d{6}$/.test(code)) return failure(reply, 400, 'invalid_code');
     if (!await loginRateAllowed(pool, request.ip, email, 'verify', 12) ||
       !await rateAllowed(pool, [[`verify-day:address:${email}`, 30, 86_400]])) return failure(reply, 429, 'try_later');
+    const key = enrollmentKey(enrollment, uid);
+    const activeIntent = intentDigest(request, realm, uid);
     const created = await transaction(pool, async (db) => {
       const attempt = (await db.query<{ password_hash: string | null; intent_digest: string | null; invitation_digest: string | null }>(
         `DELETE FROM email_registrations WHERE email = $1 AND token_digest = $2 AND enrollment_digest = $3
           AND expires_at > now() AND attempts < $4 RETURNING password_hash, intent_digest, invitation_digest`,
-        [email, codeKey(enrollment, code), web.keyFor(enrollment), codeAttempts])).rows[0];
+        [email, codeKey(enrollment, code), key, codeAttempts])).rows[0];
       if (!attempt) return undefined;
       const account = await registerNewAccount(db, email, attempt.password_hash, true, attempt.invitation_digest);
       if (account.error) return account.error === 'email_in_use' ? undefined : { error: account.error };
       const { id } = account;
       await audit(db, 'account.email_registered', id, id);
-      return { token: await web.issue(db, id, 0, request), body: { created: true, ...await continuation(db, request, id, attempt.intent_digest) } };
+      return { token: await web.issue(db, id, 0, request), body: { created: true, ...await continuation(db, activeIntent, id, attempt.intent_digest) } };
     });
     if (!created) {
       // A code guessed wrong five times is spent, so a six-digit code cannot be brute-forced.
-      await pool.query('UPDATE email_registrations SET attempts = attempts + 1 WHERE enrollment_digest = $1', [web.keyFor(enrollment)]);
+      await pool.query('UPDATE email_registrations SET attempts = attempts + 1 WHERE enrollment_digest = $1', [key]);
       return failure(reply, 400, 'invalid_code');
     }
-    setBrowserCookie(reply, enrollmentCookie, '', 0);
+    setBrowserCookie(reply, enrollmentCookieFor(uid), '', 0);
     if (created.error) return failure(reply, 403, created.error);
     web.grant(reply, created.token);
     return reply.code(201).send(created.body);
-  });
+  }
+  app.post('/account/register', guard, (request, reply) => registerAccount(request, reply));
+  app.get('/account/enrollment', (request, reply) => pendingEnrollment(request, reply));
+  app.post('/account/resend', guard, (request, reply) => resendEnrollment(request, reply));
+  app.post('/account/verify', guard, (request, reply) => verifyEnrollment(request, reply));
 
   app.post('/account/login', guard, async (request, reply) => {
     const submitted = fields(request, 'email', 'password');
@@ -747,5 +755,5 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       return result ? { enabled: result.enabled, changed: result.changed } : failure(reply, 403, 'account_not_managed');
     });
   }
-  return { requestLoginCode, verifyLoginCode, passwordlessAvailable };
+  return { requestLoginCode, verifyLoginCode, passwordlessAvailable, registerAccount, pendingEnrollment, verifyEnrollment, resendEnrollment };
 }

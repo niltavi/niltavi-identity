@@ -1,17 +1,19 @@
 import { Button, Link, buttonVariants } from '@heroui/react';
-import { useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import { call } from './api';
-import type { Account } from './api';
-import { SignIn } from './auth';
+import type { Account, Settings } from './api';
+import { Recover, Register, SignIn } from './auth';
 import { BrandFooter, BrandHeader, container, pathFor } from './site';
-import type { Language } from './site';
-import { AppContext, AuthLayout } from './ui';
+import type { Language, Route } from './site';
+import { AppContext, AuthLayout, Loaded, useApp, useLoad } from './ui';
 
-export type ProtocolView = 'login' | 'logout' | 'signed-out' | 'expired';
+type InteractionView = 'login' | 'register' | 'recover';
+export type ProtocolView = InteractionView | 'logout' | 'signed-out' | 'expired';
 export type ProtocolData = {
   view: ProtocolView; invalid: boolean; throttled: boolean; registration?: string | undefined; passwordless: boolean;
   language: Language; appName?: string | undefined; appUrl?: string | undefined;
   signInName?: string | undefined; signInLogoUrl?: string | undefined;
+  interactionPath: string | undefined; loginPath: string | undefined; recoverPath: string | undefined;
 };
 const languageKey = 'identity.protocol-language';
 const refreshAccount = () => call<{ account: Account }>('/account/session').then(result => result.account, () => null);
@@ -23,13 +25,27 @@ function chosenLanguage(fallback: Language): Language {
   } catch { return fallback; }
 }
 
-// Pages inside a sign-in or sign-out request. Their address belongs to the request, so the
-// language changes in place and the form posts back to the same path.
+function InteractionForm({ data, view, path }: { data: ProtocolData; view: InteractionView; path: string }) {
+  const app = useApp();
+  const source = useLoad(() => call<Settings>('/account/config'), 'interaction-settings');
+  if (view === 'login') {
+    return <SignIn interaction={{ path, passwordless: data.passwordless, registration: data.registration,
+      initialError: data.throttled ? 'try_later' : data.invalid ? 'invalid_credentials' : undefined }} />;
+  }
+  return <Loaded source={source}>{settings => <AppContext.Provider value={{ ...app, settings }}>
+    {view === 'register' ? <Register interactionPath={path} /> : <Recover />}
+  </AppContext.Provider>}</Loaded>;
+}
+
+// All pages of the authorization request use the same browser-bound interaction.
 export function ProtocolPage({ data }: { data: ProtocolData }) {
-  const { view, appName, appUrl } = data;
+  const { appName, appUrl, interactionPath, loginPath, registration, recoverPath } = data;
+  const [view, setView] = useState(data.view);
   const [language, setLanguage] = useState(() => chosenLanguage(data.language));
   const t = (en: string, zh: string) => language === 'en' ? en : zh;
   const title = view === 'login' ? t('Sign in', '登录')
+    : view === 'register' ? t('Create an account', '创建账号')
+    : view === 'recover' ? t('Reset your password', '重置密码')
     : view === 'logout' ? t('Sign out of all Niltavi apps in this browser', '退出这个浏览器上的所有 Niltavi 应用')
     : view === 'signed-out' ? t('You are signed out', '你已退出')
     : t('This sign-in request has expired', '登录请求已过期');
@@ -37,18 +53,38 @@ export function ProtocolPage({ data }: { data: ProtocolData }) {
     document.documentElement.lang = language;
     document.title = data.signInName ? `${title} · ${data.signInName}` : title;
   }, [language, title, data.signInName]);
+  useEffect(() => {
+    if (!interactionPath) return;
+    function update() {
+      const path = window.location.pathname;
+      if (path === loginPath) setView('login');
+      else if (path === registration) setView('register');
+      else if (path === recoverPath) setView('recover');
+    }
+    window.addEventListener('popstate', update);
+    return () => window.removeEventListener('popstate', update);
+  }, [interactionPath, loginPath, registration, recoverPath]);
   function choose(next: Language) {
     try { window.sessionStorage.setItem(languageKey, next); } catch { /* the choice lasts for this page only */ }
     setLanguage(next);
   }
   const header = <BrandHeader route={{ language, section: 'login' }} onLanguage={choose} />;
-  if (view === 'login') {
+  if (interactionPath && (view === 'login' || view === 'register' || view === 'recover')) {
+    const paths = { login: loginPath, register: registration, recover: recoverPath };
+    const routeHref = (route: Route) => route.section === 'login' || route.section === 'register' || route.section === 'recover'
+      ? paths[route.section] ?? pathFor(route) : pathFor(route);
+    function navigate(route: Route) {
+      const { section } = route;
+      if ((section === 'login' || section === 'register' || section === 'recover') && paths[section]) {
+        const next = paths[section]!;
+        if (window.location.pathname !== next) window.history.pushState(null, '', next);
+        setView(section);
+      } else window.location.assign(pathFor(route));
+    }
     return <div className="flex min-h-svh flex-col bg-background text-foreground">
       <AuthLayout brand={{ name: data.signInName, logoUrl: data.signInLogoUrl, logoAlt: appName }} controls={header}>
-        <AppContext.Provider value={{ language, t, settings: undefined, account: undefined,
-          navigate: route => window.location.assign(pathFor(route)), refresh: refreshAccount }}>
-          <SignIn interaction={{ path: window.location.pathname, passwordless: data.passwordless, registration: data.registration,
-            initialError: data.throttled ? 'try_later' : data.invalid ? 'invalid_credentials' : undefined }} />
+        <AppContext.Provider value={{ language, t, settings: undefined, account: undefined, navigate, routeHref, refresh: refreshAccount }}>
+          <InteractionForm data={data} view={view} path={interactionPath} />
         </AppContext.Provider>
       </AuthLayout>
     </div>;

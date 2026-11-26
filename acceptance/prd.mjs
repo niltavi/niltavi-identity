@@ -404,11 +404,18 @@ try {
   assert.match(elsewhere.text, /data-protocol="expired"/);
   assert.match(elsewhere.text, /data-app-name="App One"/);
   assert.match(elsewhere.text, /data-app-url="https:\/\/app-one\.localhost:43921\/"/);
-  assert.equal((await fresh.session.get(freshInteraction)).location, '/zh/register');
-  const signup = await fresh.session.post('/account/register', { email: 'newcomer@example.test', password });
+  const registrationPage = await fresh.session.get(freshInteraction);
+  assert.equal(registrationPage.status, 200);
+  assert.match(registrationPage.text, /data-protocol="register"/);
+  assert.match(registrationPage.text, /data-sign-in-name="Brand One &amp; Co"/);
+  assert.match(registrationPage.text, /data-language="zh-CN"/);
+  assert.match(registrationPage.text, /data-login-path="\/interaction\/[\w-]+"/);
+  assert.equal((await browser().get(freshInteraction)).status, 400);
+  const signup = await fresh.session.post(freshInteraction, { email: 'newcomer@example.test', password });
   assert.match(signup.body.continueTo, /^\/interaction\/[\w-]+\/registered$/);
   const returned = await fresh.follow(await fresh.session.get(signup.body.continueTo));
   assert.ok(returned.location?.startsWith(one.callback), 'A new account lands on the application callback directly');
+  assert.equal(new URL(returned.location).searchParams.get('state'), fresh.state);
   assert.equal(decodeJwt((await fresh.tokens(returned.location)).body.id_token).email, 'newcomer@example.test');
   assert.equal((await fresh.session.get(signup.body.continueTo)).status, 400, 'The continuation link completes one request once');
   passed('a new registration returns to the application with no intermediate page');
@@ -626,6 +633,27 @@ try {
   assert.equal(decodeJwt((await otp.tokens(returnedToApp.location)).body.id_token).sub, memberId);
   assert.equal((await otp.session.get('/account/session')).body.account.id, memberId);
   passed('sign-in with an email code completes the original app request and opens an Identity session');
+
+  const signupFlow = flow(one);
+  const signupStart = await signupFlow.start();
+  const signupLogin = new URL(signupStart.location, issuer).pathname;
+  const signupRegister = signupLogin + '/register';
+  const signupAddress = 'branded-registration@example.test';
+  const signupMailStart = inbox.length;
+  assert.equal((await signupFlow.session.post(signupRegister, { email: signupAddress })).status, 202);
+  const [, signupCode] = await mail(signupAddress, /^(\d{6})$/m, signupMailStart);
+  assert.equal((await signupFlow.session.get(signupLogin)).status, 200);
+  assert.equal((await signupFlow.session.get(signupRegister)).status, 200);
+  assert.equal((await signupFlow.session.get(signupRegister + '/enrollment')).body.email, signupAddress);
+  assert.equal((await signupFlow.session.get('/account/enrollment')).status, 404);
+  const signupVerified = await signupFlow.session.post(signupRegister, { email: signupAddress, code: signupCode });
+  assert.equal(signupVerified.status, 201);
+  const signupResumed = await signupFlow.session.get(signupRegister);
+  assert.equal(signupResumed.location, signupVerified.body.continueTo);
+  const signupReturned = await signupFlow.follow(signupResumed);
+  assert.equal(new URL(signupReturned.location).searchParams.get('state'), signupFlow.state);
+  assert.equal(decodeJwt((await signupFlow.tokens(signupReturned.location)).body.id_token).email, signupAddress);
+  passed('branded registration survives back navigation and verification resumes the same application request');
 
   // Registration answers the same for a new and an existing address.
   const timed = async (email) => {

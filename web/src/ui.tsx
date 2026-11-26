@@ -19,6 +19,7 @@ import type { Language, Navigate, Route } from './site';
 export type App = {
   language: Language;
   navigate: Navigate;
+  routeHref?: (route: Route) => string;
   t: (en: string, zh: string) => string;
   settings: Settings | undefined;
   // `undefined` while the session is being checked, `null` when nobody is signed in.
@@ -140,9 +141,10 @@ export function useTime() {
     ? new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '', [language]);
 }
 
-export function PageLink({ to, children, ...props }: Omit<ComponentProps<typeof RouteLink>, 'route' | 'navigate'> & { to: Omit<Route, 'language'> }) {
-  const { language, navigate } = useApp();
-  return <RouteLink {...props} route={{ ...to, language }} navigate={navigate}>{children}</RouteLink>;
+export function PageLink({ to, children, ...props }: Omit<ComponentProps<typeof RouteLink>, 'route' | 'navigate' | 'href'> & { to: Omit<Route, 'language'> }) {
+  const { language, navigate, routeHref } = useApp();
+  const route = { ...to, language };
+  return <RouteLink {...props} route={route} navigate={navigate} {...(routeHref ? { href: routeHref(route) } : {})}>{children}</RouteLink>;
 }
 
 export function passwordLength(value: string) { return [...value].length; }

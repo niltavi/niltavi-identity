@@ -61,9 +61,9 @@ export function followRoute(event: MouseEvent<Element>, route: Route, navigate?:
   }
 }
 
-export function RouteLink({ route, navigate, onClick, ...props }: Omit<ComponentProps<typeof Link>, 'href'> &
-  { route: Route; navigate?: Navigate | undefined; onClick?: ComponentProps<typeof Link>['onClick'] }) {
-  return <Link {...props} href={pathFor(route)} onClick={event => {
+export function RouteLink({ route, navigate, href, onClick, ...props }: ComponentProps<typeof Link> &
+  { route: Route; navigate?: Navigate | undefined }) {
+  return <Link {...props} href={href ?? pathFor(route)} onClick={event => {
     onClick?.(event);
     followRoute(event, route, navigate);
   }} />;

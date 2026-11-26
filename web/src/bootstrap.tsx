@@ -7,11 +7,12 @@ const root = document.getElementById('root');
 if (!root) throw new Error('Missing Identity application root.');
 
 const { protocol: view, ...data } = root.dataset;
-if (view === 'login' || view === 'logout' || view === 'signed-out' || view === 'expired') {
+if (view === 'login' || view === 'register' || view === 'recover' || view === 'logout' || view === 'signed-out' || view === 'expired') {
   createRoot(root).render(<ProtocolPage data={{
     view, invalid: data.invalid === 'true', throttled: data.throttled === 'true', registration: data.registration, passwordless: data.passwordless === 'true',
     language: data.language === 'zh-CN' ? 'zh-CN' : 'en', appName: data.appName, appUrl: data.appUrl,
     signInName: data.signInName, signInLogoUrl: data.signInLogoUrl,
+    interactionPath: data.interactionPath, loginPath: data.loginPath, recoverPath: data.recover,
   }} />);
 } else {
   // The prerendered markup knows the section only. The open tab is applied after hydration.

@@ -23,7 +23,7 @@ Identity is an OpenID Connect provider. Discover it at `/.well-known/openid-conf
 - `ui_locales` chooses the language of the sign-in page (`en` or `zh-CN`). Without it the page follows the browser.
 - `prompt=create` opens registration directly.
 
-The sign-in page names the application that asked. After sign-in or registration the browser returns straight to the application's callback. A browser that already has a session at Identity returns without any input. A page that says the request expired, with a button back to the application, appears only when the request can no longer be completed.
+Sign-in, registration, and the password recovery form show the application's configured branding. Moving between these pages keeps the same authorization request. Completing sign-in or registration returns the browser straight to the application's callback, using the original state and PKCE challenge. A browser that already has a session at Identity returns without input when the application does not request fresh authentication. When the request expires or opens in a different browser, the page links back to the application.
 
 Which page the user came from is the application's own business. Keep it on the application side and accept only a same-origin relative path.
 
