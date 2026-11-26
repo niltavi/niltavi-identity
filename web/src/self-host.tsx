@@ -1,4 +1,4 @@
-import { Button, Surface } from '@heroui/react';
+import { Button, Disclosure } from '@heroui/react';
 import Copy from '@gravity-ui/icons/Copy';
 import { useState } from 'react';
 import { container, copy, repository } from './site';
@@ -11,6 +11,7 @@ export const deploymentCopy = {
     title: 'Self-host · Niltavi Identity',
     description: 'Copy the prompt and give it to your agent to deploy Niltavi Identity with Docker Compose.',
     copy: 'Copy prompt',
+    preview: 'Prompt preview',
     copied: 'Copied. Paste the prompt into your agent.',
     copyFailed: 'Select and copy the prompt manually.',
     prompt: (mirror: string) => [
@@ -24,6 +25,7 @@ export const deploymentCopy = {
     title: '本地部署 · Niltavi Identity',
     description: '复制提示词发给你的 Agent，让它用 Docker Compose 部署 Niltavi Identity。',
     copy: '复制提示词',
+    preview: '提示词预览',
     copied: '已复制。可以粘贴给你的 Agent 了。',
     copyFailed: '请选中提示词并手动复制。',
     prompt: (mirror: string) => [
@@ -39,12 +41,14 @@ export function SelfHost({ language, origin }: { language: Language; origin: str
   const labels = deploymentCopy[language];
   const prompt = labels.prompt(origin + '/identity-assets/for-agents.md');
   const [status, setStatus] = useState<'copied' | 'copyFailed'>();
+  const [expanded, setExpanded] = useState(false);
 
   async function copyPrompt() {
     try {
       await navigator.clipboard.writeText(prompt);
       setStatus('copied');
     } catch {
+      setExpanded(true);
       setStatus('copyFailed');
     }
   }
@@ -59,9 +63,19 @@ export function SelfHost({ language, origin }: { language: Language; origin: str
         <Button onPress={() => void copyPrompt()}><Copy aria-hidden="true" width={16} height={16} />{labels.copy}</Button>
         <p role="status" className="text-sm text-muted">{status && labels[status]}</p>
       </div>
-      <Surface className="rounded-(--field-radius) p-4 ring ring-border sm:p-6">
-        <p className="whitespace-pre-wrap wrap-anywhere text-base/relaxed select-text">{prompt}</p>
-      </Surface>
+      <Disclosure className="rounded-(--field-radius) bg-surface ring ring-border"
+        isExpanded={expanded} onExpandedChange={setExpanded}>
+        <Disclosure.Heading>
+          <Button slot="trigger" variant="ghost" className="min-h-12 w-full justify-between rounded-(--field-radius) px-4">
+            {labels.preview}<Disclosure.Indicator />
+          </Button>
+        </Disclosure.Heading>
+        <Disclosure.Content>
+          <Disclosure.Body className="px-4 pt-1 pb-4">
+            <p className="whitespace-pre-wrap wrap-anywhere text-sm/relaxed text-muted select-text">{prompt}</p>
+          </Disclosure.Body>
+        </Disclosure.Content>
+      </Disclosure>
     </div>
   </main>;
 }

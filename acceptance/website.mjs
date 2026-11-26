@@ -204,28 +204,39 @@ try {
   await page.waitForURL(origin + '/self-host');
   await expect(deployTab).toHaveAttribute('aria-current', 'page');
   assert.equal(await page.evaluate(() => window.__identityDoc), 'retained');
+  const preview = page.getByRole('button', { name: 'Prompt preview' });
   const prompt = page.getByText('Help me deploy Niltavi Identity on my machine.', { exact: false });
-  await expect(prompt).toContainText('Docker Compose');
-  await expect(prompt).toContainText('https://github.com/niltavi/niltavi-identity/blob/main/docs/en/for-agents.md');
-  const mirror = '/identity-assets/for-agents.md';
-  await expect(prompt).toContainText(origin + mirror);
-  assert.match(await page.evaluate(async path => (await fetch(path)).text(), mirror), /Deploy with Docker Compose/);
+  await expect(preview).toHaveAttribute('aria-expanded', 'false');
+  await expect(prompt).toBeHidden();
   const copyPrompt = page.getByRole('button', { name: 'Copy prompt' });
   await page.evaluate(() => {
     navigator.clipboard.writeText = async text => { window.__identityCopiedPrompt = text; };
   });
   await copyPrompt.click();
   await expect(page.getByRole('status')).toHaveText('Copied. Paste the prompt into your agent.');
-  assert.equal(await page.evaluate(() => window.__identityCopiedPrompt), await prompt.textContent());
+  await expect(preview).toHaveAttribute('aria-expanded', 'false');
   if (evidence) {
     await page.mouse.move(3, 140);
     await page.screenshot({ path: join(evidence, 'identity-self-host-en-light-desktop.png'), fullPage: true });
   }
+  await preview.press('Enter');
+  await expect(preview).toHaveAttribute('aria-expanded', 'true');
+  await expect(prompt).toBeVisible();
+  await expect(prompt).toContainText('Docker Compose');
+  await expect(prompt).toContainText('https://github.com/niltavi/niltavi-identity/blob/main/docs/en/for-agents.md');
+  const mirror = '/identity-assets/for-agents.md';
+  await expect(prompt).toContainText(origin + mirror);
+  assert.match(await page.evaluate(async path => (await fetch(path)).text(), mirror), /Deploy with Docker Compose/);
+  assert.equal(await page.evaluate(() => window.__identityCopiedPrompt), await prompt.textContent());
+  await preview.press('Enter');
+  await expect(prompt).toBeHidden();
   await page.evaluate(() => {
     navigator.clipboard.writeText = async () => { throw new DOMException('Clipboard denied', 'NotAllowedError'); };
   });
   await copyPrompt.click();
   await expect(page.getByRole('status')).toHaveText('Select and copy the prompt manually.');
+  await expect(preview).toHaveAttribute('aria-expanded', 'true');
+  await expect(prompt).toBeVisible();
   assert.equal(page.url(), origin + '/self-host');
   await homeTab.click();
   await page.waitForURL(origin + '/');
