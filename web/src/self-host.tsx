@@ -1,4 +1,4 @@
-import { Button, Disclosure } from '@heroui/react';
+import { Button, Modal } from '@heroui/react';
 import Copy from '@gravity-ui/icons/Copy';
 import { useState } from 'react';
 import { container, copy, repository } from './site';
@@ -12,6 +12,7 @@ export const deploymentCopy = {
     description: 'Copy the prompt and give it to your agent to deploy Niltavi Identity with Docker Compose.',
     copy: 'Copy prompt',
     preview: 'Prompt preview',
+    close: 'Close',
     copied: 'Copied. Paste the prompt into your agent.',
     copyFailed: 'Select and copy the prompt manually.',
     prompt: (mirror: string) => [
@@ -26,6 +27,7 @@ export const deploymentCopy = {
     description: '复制提示词发给你的 Agent，让它用 Docker Compose 部署 Niltavi Identity。',
     copy: '复制提示词',
     preview: '提示词预览',
+    close: '关闭',
     copied: '已复制。可以粘贴给你的 Agent 了。',
     copyFailed: '请选中提示词并手动复制。',
     prompt: (mirror: string) => [
@@ -41,14 +43,14 @@ export function SelfHost({ language, origin }: { language: Language; origin: str
   const labels = deploymentCopy[language];
   const prompt = labels.prompt(origin + '/identity-assets/for-agents.md');
   const [status, setStatus] = useState<'copied' | 'copyFailed'>();
-  const [expanded, setExpanded] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   async function copyPrompt() {
     try {
       await navigator.clipboard.writeText(prompt);
       setStatus('copied');
     } catch {
-      setExpanded(true);
+      if (!previewOpen) setPreviewOpen(true);
       setStatus('copyFailed');
     }
   }
@@ -61,21 +63,33 @@ export function SelfHost({ language, origin }: { language: Language; origin: str
       </div>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <Button onPress={() => void copyPrompt()}><Copy aria-hidden="true" width={16} height={16} />{labels.copy}</Button>
-        <p role="status" className="text-sm text-muted">{status && labels[status]}</p>
+        <Modal isOpen={previewOpen} onOpenChange={open => {
+          setPreviewOpen(open);
+          setStatus(undefined);
+        }}>
+          <Button variant="secondary">{labels.preview}</Button>
+          <Modal.Backdrop>
+            <Modal.Container placement="center" scroll="inside" size="lg">
+              <Modal.Dialog>
+                <Modal.CloseTrigger aria-label={labels.close} />
+                <Modal.Header className="pe-8">
+                  <Modal.Heading>{labels.preview}</Modal.Heading>
+                </Modal.Header>
+                <Modal.Body>
+                  <p className="whitespace-pre-wrap wrap-anywhere text-sm/relaxed text-muted select-text">{prompt}</p>
+                </Modal.Body>
+                <Modal.Footer className="flex-wrap">
+                  <p role="status" className="text-sm text-muted">{status && labels[status]}</p>
+                  <Button className="ms-auto" onPress={() => void copyPrompt()}>
+                    <Copy aria-hidden="true" width={16} height={16} />{labels.copy}
+                  </Button>
+                </Modal.Footer>
+              </Modal.Dialog>
+            </Modal.Container>
+          </Modal.Backdrop>
+        </Modal>
+        <p role="status" className="text-sm text-muted">{!previewOpen && status === 'copied' && labels.copied}</p>
       </div>
-      <Disclosure className="rounded-(--field-radius) bg-surface ring ring-border"
-        isExpanded={expanded} onExpandedChange={setExpanded}>
-        <Disclosure.Heading>
-          <Button slot="trigger" variant="ghost" className="min-h-12 w-full justify-between rounded-(--field-radius) px-4">
-            {labels.preview}<Disclosure.Indicator />
-          </Button>
-        </Disclosure.Heading>
-        <Disclosure.Content>
-          <Disclosure.Body className="px-4 pt-1 pb-4">
-            <p className="whitespace-pre-wrap wrap-anywhere text-sm/relaxed text-muted select-text">{prompt}</p>
-          </Disclosure.Body>
-        </Disclosure.Content>
-      </Disclosure>
     </div>
   </main>;
 }
