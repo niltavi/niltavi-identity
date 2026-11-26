@@ -13,12 +13,13 @@ type Notice = {
   subject: string;
   title: string;
   introduction: string;
+  mutedIntroduction?: boolean;
   code?: string;
   actions?: Action[];
   note?: string;
 };
 
-function render({ subject, title, introduction, code, actions = [], note }: Notice): Message {
+function render({ subject, title, introduction, mutedIntroduction, code, actions = [], note }: Notice): Message {
   const text = [introduction, code, ...actions.map(({ label, url }) => `${label}: ${url}`), note,
     `Need help? Contact ${mailSupport}.`].filter(Boolean).join('\n\n');
   const codePanel = code ? `
@@ -48,7 +49,7 @@ function render({ subject, title, introduction, code, actions = [], note }: Noti
               <img src="${brandImage}" width="82" height="30" alt="Niltavi" style="display:inline-block;width:82px;height:30px;vertical-align:middle;border:0">
             </p>
             <h1 style="font-size:25px;line-height:1.25;margin:0 0 12px;font-weight:700;color:#1b1d22">${escape(title)}</h1>
-            <p style="margin:0">${escape(introduction)}</p>
+            <p style="margin:0${mutedIntroduction ? ';color:#616976' : ''}">${escape(introduction)}</p>
             ${codePanel}${actionLinks}
             ${note ? `<p style="margin:22px 0 0;font-size:14px;color:#616976">${escape(note)}</p>` : ''}
           </div>
@@ -68,6 +69,7 @@ export const messages = {
     subject: verificationSubject,
     title: 'Your verification code',
     introduction: 'Enter this code to continue with Niltavi Identity.',
+    mutedIntroduction: true,
     code,
     note: "The code expires in 15 minutes. If you didn't request it, you can ignore this email.",
   }),
