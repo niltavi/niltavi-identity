@@ -18,17 +18,19 @@ const page = context.pages()[0] ?? await context.newPage();
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 const localized = [
-  ['/', 'en', 'One account for your apps', 'Niltavi Identity'],
-  ['/zh/', 'zh-CN', /一个账号，\s*登录多个应用/, 'Niltavi Identity · 统一登录'],
+  ['/', 'en', 'One identity, wherever you go', 'Niltavi Identity', '/', '/zh/'],
+  ['/zh/', 'zh-CN', '一个身份随处可用', 'Niltavi Identity · 统一登录', '/', '/zh/'],
+  ['/self-host', 'en', 'Self-host', 'Self-host · Niltavi Identity', '/self-host', '/zh/self-host'],
+  ['/zh/self-host', 'zh-CN', '本地部署', '本地部署 · Niltavi Identity', '/self-host', '/zh/self-host'],
 ];
 
 try {
-  for (const [path, lang, heading, title] of localized) {
+  for (const [path, lang, heading, title, en, zh] of localized) {
     const initial = await page.goto(origin + path);
     assert.equal(initial.status(), 200);
     const markup = (await initial.body()).toString('utf8');
     assert.match(markup, /<h1[^>]*>[^]*?<\/h1>/);
-    assert.match(markup.replace(/<[^>]+>/g, ''), typeof heading === 'string' ? new RegExp(heading) : heading);
+    assert.match(markup.replace(/<[^>]+>/g, ''), new RegExp(heading));
     assert.ok(markup.includes('<html lang="' + lang + '">'));
     assert.ok(markup.includes('<title>' + title + '</title>'));
     assert.ok(markup.includes('<meta name="description"'));
@@ -37,20 +39,25 @@ try {
     await expect(page.getByRole('heading', { name: heading })).toBeVisible();
     await expect(page).toHaveTitle(title);
     await expect(page.locator('link[rel=canonical]')).toHaveAttribute('href', origin + path);
-    await expect(page.locator('link[hreflang="en"]')).toHaveAttribute('href', origin + '/');
-    await expect(page.locator('link[hreflang="zh-CN"]')).toHaveAttribute('href', origin + '/zh/');
-    await expect(page.locator('link[hreflang=x-default]')).toHaveAttribute('href', origin + '/');
-    await page.locator('main img[src$="identity-logo-textured.png"]').evaluate(image => image.decode());
+    await expect(page.locator('link[hreflang="en"]')).toHaveAttribute('href', origin + en);
+    await expect(page.locator('link[hreflang="zh-CN"]')).toHaveAttribute('href', origin + zh);
+    await expect(page.locator('link[hreflang=x-default]')).toHaveAttribute('href', origin + en);
+    await expect(page.locator('meta[name=robots]')).toHaveAttribute('content', 'index,follow');
+    if (path === '/' || path === '/zh/') {
+      await page.locator('main img[src$="identity-logo-textured.png"]').evaluate(image => image.decode());
+    }
     assert.equal(await page.locator('form').count(), 0);
   }
   const sitemap = await page.evaluate(async () => (await fetch('/sitemap.xml')).text());
-  assert.ok(sitemap.includes('<loc>' + origin + '/</loc>'));
-  assert.ok(sitemap.includes('<loc>' + origin + '/zh/</loc>'));
+  for (const [path] of localized) assert.ok(sitemap.includes('<loc>' + origin + path + '</loc>'));
   assert.equal(await page.evaluate(async () => (await fetch('/account/session')).status), 401);
 
   await page.goto(origin + '/');
   const header = page.getByRole('banner');
   const brand = header.getByRole('link', { name: 'Identity', exact: true });
+  const nav = header.getByRole('navigation');
+  const homeTab = nav.getByRole('link', { name: 'Home', exact: true });
+  const deployTab = nav.getByRole('link', { name: 'Self-host', exact: true });
   const signIn = header.getByRole('link', { name: 'Sign in', exact: true });
   const theme = header.getByRole('button', { name: 'Switch to dark theme' });
   const language = header.getByRole('button', { name: 'Language' });
@@ -64,7 +71,9 @@ try {
   assert.deepEqual(brandMetrics, ['20px', '500', '20px', '10px', 40, 40]);
   assert.deepEqual(await theme.evaluate(n => [n.getBoundingClientRect().width, n.querySelector('svg').getBoundingClientRect().width]), [32, 18]);
 
-  for (const control of [brand, signIn, theme, language]) {
+  await expect(nav.getByRole('link')).toHaveCount(2);
+  await expect(homeTab).toHaveAttribute('aria-current', 'page');
+  for (const control of [brand, homeTab, deployTab, signIn, theme, language]) {
     await page.keyboard.press('Tab');
     await expect(control).toBeFocused();
     assert.equal(await control.evaluate(n => n.matches(':focus-visible')), true);
@@ -80,7 +89,7 @@ try {
   await page.keyboard.press('Enter');
   await page.waitForURL(origin + '/zh/');
   assert.equal(await page.evaluate(() => window.__identityDoc), 'retained');
-  await expect(page.getByRole('heading', { name: /一个账号，\s*登录多个应用/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '一个身份随处可用' })).toBeVisible();
   await header.getByRole('button', { name: '切换到深色主题' }).click();
 
   async function brandColorCheck() {
@@ -113,7 +122,10 @@ try {
       await page.setViewportSize({ width, height: 850 });
       const widths = await page.locator('header > div, main, footer').evaluateAll(nodes => nodes.map(n => n.getBoundingClientRect().width));
       assert.deepEqual(widths, [expected, expected, expected], 'Container width at ' + width);
-      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth),
+        { message: 'Page width at ' + width + 'px' }).toBeLessThanOrEqual(width);
+      const nameOverflow = await brand.locator('.niltavi-project-brand__name').evaluate(n => n.scrollWidth - n.clientWidth);
+      assert.ok(nameOverflow <= 1, 'Brand name overflow at ' + width + 'px: ' + nameOverflow + 'px');
     }
   }
   const dark = await colorCheck('dark');
@@ -126,6 +138,36 @@ try {
     await page.screenshot({ path: join(evidence, 'identity-zh-dark-320.png'), fullPage: true });
   }
 
+  const mobile = page.getByRole('main');
+  const registerLink = mobile.getByRole('link', { name: '创建账号' });
+  await expect(registerLink).toHaveClass(/button--primary/);
+  await registerLink.click();
+  await page.waitForURL(origin + '/zh/register');
+  await expect(mobile).toHaveClass('nt-authlayout__content');
+  await expect(mobile.getByRole('heading', { name: '创建账号' })).toBeVisible();
+  await expect(mobile.getByLabel('邮箱', { exact: true })).toBeVisible();
+  assert.equal(await page.evaluate(() => window.__identityDoc), 'retained');
+  await page.goBack();
+  await page.waitForURL(origin + '/zh/');
+  await mobile.getByRole('link', { name: '本地部署' }).click();
+  await page.waitForURL(origin + '/zh/self-host');
+  await expect(nav.getByRole('link', { name: '本地部署' })).toHaveAttribute('aria-current', 'page');
+  assert.equal(await page.evaluate(() => window.__identityDoc), 'retained');
+  assert.equal(await colorCheck('dark'), dark);
+  await widths();
+  await page.setViewportSize({ width: 320, height: 850 });
+  await expect(page.getByRole('button', { name: '复制提示词' })).toBeInViewport();
+  if (evidence) await page.screenshot({ path: join(evidence, 'identity-self-host-zh-dark-320.png'), fullPage: true });
+  await header.getByRole('button', { name: '语言' }).click();
+  await page.getByRole('menu').getByText('English', { exact: true }).click();
+  await page.waitForURL(origin + '/self-host');
+  await expect(deployTab).toHaveAttribute('aria-current', 'page');
+  await page.goBack();
+  await page.waitForURL(origin + '/zh/self-host');
+  await expect(page.getByRole('heading', { name: '本地部署' })).toBeVisible();
+  await nav.getByRole('link', { name: '首页' }).click();
+  await page.waitForURL(origin + '/zh/');
+
   let releaseConfig;
   const configGate = new Promise(resolve => { releaseConfig = resolve; });
   let reportHeld;
@@ -135,13 +177,12 @@ try {
     await configGate;
     await intercepted.continue();
   });
-  const headerHandle = await header.elementHandle();
   await header.getByRole('link', { name: '登录' }).click();
   try {
     await Promise.race([configHeld, new Promise((_, reject) => setTimeout(() => reject(new Error('Session request was not held')), 8000).unref())]);
     await page.waitForURL(origin + '/zh/login');
     await expect(page.getByRole('main').locator('[aria-busy="true"]')).toBeVisible();
-    assert.equal(await headerHandle.evaluate(n => n.isConnected), true);
+    await expect(header.getByRole('button', { name: '语言' })).toBeVisible();
     assert.equal(await page.evaluate(() => window.__identityDoc), 'retained');
     assert.equal(await colorCheck('dark'), dark);
   } finally { releaseConfig(); }
@@ -151,9 +192,14 @@ try {
   await page.getByRole('menu').getByText('English', { exact: true }).click();
   await page.waitForURL(origin + '/login');
   await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
-  assert.equal(await headerHandle.evaluate(n => n.isConnected), true);
+  assert.equal(await page.evaluate(() => window.__identityDoc), 'retained');
   assert.equal(await colorCheck('dark'), dark);
-  await header.getByRole('link', { name: 'Identity', exact: true }).click();
+  await page.goBack();
+  await page.waitForURL(origin + '/zh/login');
+  await page.goBack();
+  await page.waitForURL(origin + '/zh/');
+  await header.getByRole('button', { name: '语言' }).click();
+  await page.getByRole('menu').getByText('English', { exact: true }).click();
   await page.waitForURL(origin + '/');
   await header.getByRole('button', { name: 'Switch to light theme' }).click();
   const light = await colorCheck('light');
@@ -167,10 +213,49 @@ try {
     await page.mouse.move(3, 140);
     await page.screenshot({ path: join(evidence, 'identity-en-light-desktop.png'), fullPage: true });
   }
-  const guideUrl = await page.getByRole('link', { name: 'Install with an agent' }).getAttribute('href');
-  assert.match(await page.evaluate(async path => (await fetch(path)).text(), guideUrl), /Install Niltavi Identity/);
+  await deployTab.click();
+  await page.waitForURL(origin + '/self-host');
+  await expect(deployTab).toHaveAttribute('aria-current', 'page');
+  assert.equal(await page.evaluate(() => window.__identityDoc), 'retained');
+  const preview = page.getByRole('button', { name: 'Prompt preview' });
+  const prompt = page.getByText('Help me deploy Niltavi Identity on my machine.', { exact: false });
+  await expect(preview).toHaveAttribute('aria-expanded', 'false');
+  await expect(prompt).toBeHidden();
+  const copyPrompt = page.getByRole('button', { name: 'Copy prompt' });
+  await page.evaluate(() => {
+    navigator.clipboard.writeText = async text => { window.__identityCopiedPrompt = text; };
+  });
+  await copyPrompt.click();
+  await expect(page.getByRole('status')).toHaveText('Copied. Paste the prompt into your agent.');
+  await expect(preview).toHaveAttribute('aria-expanded', 'false');
+  if (evidence) {
+    await page.mouse.move(3, 140);
+    await page.screenshot({ path: join(evidence, 'identity-self-host-en-light-desktop.png'), fullPage: true });
+  }
+  await preview.press('Enter');
+  await expect(preview).toHaveAttribute('aria-expanded', 'true');
+  await expect(prompt).toBeVisible();
+  await expect(prompt).toContainText('Docker Compose');
+  await expect(prompt).toContainText('https://github.com/niltavi/niltavi-identity/blob/main/docs/en/for-agents.md');
+  const mirror = '/identity-assets/for-agents.md';
+  await expect(prompt).toContainText(origin + mirror);
+  assert.match(await page.evaluate(async path => (await fetch(path)).text(), mirror), /Deploy with Docker Compose/);
+  assert.equal(await page.evaluate(() => window.__identityCopiedPrompt), await prompt.textContent());
+  await preview.press('Enter');
+  await expect(prompt).toBeHidden();
+  await page.evaluate(() => {
+    navigator.clipboard.writeText = async () => { throw new DOMException('Clipboard denied', 'NotAllowedError'); };
+  });
+  await copyPrompt.click();
+  await expect(page.getByRole('status')).toHaveText('Select and copy the prompt manually.');
+  await expect(preview).toHaveAttribute('aria-expanded', 'true');
+  await expect(prompt).toBeVisible();
+  assert.equal(page.url(), origin + '/self-host');
+  await homeTab.click();
+  await page.waitForURL(origin + '/');
   await page.getByRole('link', { name: 'Create an account' }).click();
   await page.waitForURL(origin + '/register');
+  await expect(page.getByRole('main')).toHaveClass('nt-authlayout__content');
   await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
   await expect(page.getByLabel('Password', { exact: true })).toBeVisible();
   assert.deepEqual(await page.locator('form input').evaluateAll(nodes => nodes.map(n => n.name)), ['email', 'password']);
@@ -185,7 +270,7 @@ try {
   try {
     const response = await slow.goto(origin + '/register', { waitUntil: 'commit' });
     assert.doesNotMatch((await response.body()).toString('utf8'), /<form\b|name="password"/);
-    await expect(slow.getByRole('main')).toHaveAttribute('aria-busy', 'true');
+    await expect(slow.getByRole('main').getByRole('status')).toHaveText('Loading…');
     await expect(slow.locator('input, form')).toHaveCount(0);
   } finally { releaseScript(); }
   await expect(slow.getByLabel('Password', { exact: true })).toBeVisible();
@@ -209,7 +294,7 @@ try {
   } finally { await noScript.close(); }
   assert.deepEqual(errors, []);
   console.log('Localized HTML, canonical and alternate URLs, sitemap, keyboard language selection, and no document reload passed.');
-  console.log('Desktop and 320px, exact Niltava background tokens, header metrics, guide, registration and delayed auth navigation passed.');
+  console.log('Desktop and 320px, Niltava background tokens, navigation tabs, prompt copy and fallback, registration and delayed auth navigation passed.');
   console.log(JSON.stringify({ origin, dark, light }));
 } finally {
   await context.close();

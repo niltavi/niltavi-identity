@@ -3,6 +3,7 @@
 @import "../vendor/niltavi-ui/templates/saas/navigation.css";
 @source "./main.tsx";
 @source "./site.tsx";
+@source "./self-host.tsx";
 @source "./ui.tsx";
 @source "./protocol.tsx";
 @source "./auth.tsx";
@@ -23,6 +24,29 @@
 }
 
 @layer components {
+  .identity-site-header .niltavi-product-header__inner {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "brand controls" "nav sign-in";
+    row-gap: var(--spacing);
+    padding-block: var(--spacing);
+  }
+
+  .identity-site-header .niltavi-project-brand { grid-area: brand; justify-self: start; }
+  .identity-site-nav { grid-area: nav; }
+  .identity-site-header .niltavi-product-header__actions { display: contents; }
+  .identity-site-header .niltavi-product-header__actions > a { grid-area: sign-in; justify-self: end; }
+  .identity-site-header .niltavi-product-header__controls { grid-area: controls; }
+
+  @media (min-width: 576px) {
+    .identity-site-header .niltavi-product-header__inner {
+      display: flex;
+      padding-block: 0;
+    }
+
+    .identity-site-header .niltavi-product-header__actions { display: flex; }
+  }
+
   .app-shell {
     height: 100dvh;
     overflow: hidden;

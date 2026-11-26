@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
+import { isPublicSection } from '../../src/browser-routes';
 import { Admin } from './admin';
 import { call, codeOf } from './api';
 import type { Account, Settings } from './api';
 import { Invite, Recover, Register, Reset, SignIn, VerifyEmail, arrive, rememberReturn } from './auth';
+import { SelfHost, deploymentCopy } from './self-host';
 import { Setup } from './setup';
 import { BrandFooter, BrandHeader, Website, container, copy, pathFor, routeFor } from './site';
 import type { Navigate, Route } from './site';
@@ -18,6 +20,10 @@ const titles: Partial<Record<Route['section'], [string, string]>> = {
   recover: ['Reset your password', '重置密码'], reset: ['Choose a new password', '设置新密码'], 'verify-email': ['Verify your email', '验证邮箱'],
   invite: ['Team invitation', '团队邀请'], setup: ['Set up Niltavi Identity', '初始化 Niltavi Identity'], admin: ['Instance console', '实例管理台'],
 };
+
+export function pageMetadata({ language, section }: Route) {
+  return section === 'self-host' ? deploymentCopy[language] : copy[language];
+}
 
 function Identity({ route, navigate, loginControls }: { route: Route; navigate: Navigate; loginControls: ReactNode }) {
   const { language, section } = route;
@@ -68,7 +74,7 @@ function Identity({ route, navigate, loginControls }: { route: Route; navigate: 
   const authSection = section === 'login' || section === 'register' || section === 'recover' || section === 'reset' || section === 'verify-email' || section === 'invite';
   return <AppContext.Provider value={app}>
     {waiting ? (authSection
-      ? <AuthLayout controls={loginControls}><div className="max-w-md"><Loaded source={{ data: undefined, error: failure, reload: start }}>{() => null}</Loaded></div></AuthLayout>
+      ? <AuthLayout controls={loginControls}><div className="w-full max-w-md"><Loaded source={{ data: undefined, error: failure, reload: start }}>{() => null}</Loaded></div></AuthLayout>
       : <main className={`${container} flex-1 py-8 md:py-12`}><div className="max-w-md"><Loaded source={{ data: undefined, error: failure, reload: start }}>{() => null}</Loaded></div></main>)
       : section === 'workspace' ? <Workspace route={route} />
       : section === 'admin' ? <Admin route={route} />
@@ -82,7 +88,7 @@ function Identity({ route, navigate, loginControls }: { route: Route; navigate: 
   </AppContext.Provider>;
 }
 
-export function BrowserApp({ initial }: { initial: Route }) {
+export function BrowserApp({ initial, origin }: { initial: Route; origin: string }) {
   const [route, setRoute] = useState(initial);
   const [interactive, setInteractive] = useState(false);
   const navigate = useCallback<Navigate>((next, replace) => {
@@ -102,32 +108,32 @@ export function BrowserApp({ initial }: { initial: Route }) {
   }, []);
 
   useLayoutEffect(() => {
-    const lang = copy[route.language];
+    const metadata = pageMetadata(route);
     const title = titles[route.section]?.[route.language === 'en' ? 0 : 1];
     document.documentElement.lang = route.language;
-    document.title = title ? `${title} · Niltavi Identity` : lang.title;
-    document.querySelector('meta[name=description]')?.setAttribute('content', lang.description);
+    document.title = title ? `${title} · Niltavi Identity` : metadata.title;
+    document.querySelector('meta[name=description]')?.setAttribute('content', metadata.description);
     document.querySelector('link[rel=canonical]')?.setAttribute('href', new URL(pathFor({ language: route.language, section: route.section }), window.location.origin).href);
     for (const alternate of document.querySelectorAll<HTMLLinkElement>('link[rel=alternate][hreflang]')) {
       const language = alternate.hreflang === 'zh-CN' ? 'zh-CN' : 'en';
       alternate.href = new URL(pathFor({ language, section: route.section }), window.location.origin).href;
     }
-    document.querySelector('meta[name=robots]')?.setAttribute('content', route.section === 'home' ? 'index,follow' : 'noindex');
+    document.querySelector('meta[name=robots]')?.setAttribute('content', isPublicSection(route.section) ? 'index,follow' : 'noindex');
   }, [route]);
 
-  const isHome = route.section === 'home';
   const hasSidebar = route.section === 'workspace' || route.section === 'admin';
   const isAuth = route.section === 'login' || route.section === 'register' || route.section === 'recover' ||
     route.section === 'reset' || route.section === 'verify-email' || route.section === 'invite';
-  const header = <BrandHeader route={route} navigate={navigate} publicPage={isHome} />;
+  const header = <BrandHeader route={route} navigate={navigate} />;
   const loginControls = route.section === 'login' ? header : undefined;
   const loadingPlaceholder = <main className={container + ' flex-1 py-8 md:py-12'} aria-busy="true">
     <p role="status" className="text-muted">{route.language === 'en' ? 'Loading…' : '正在加载…'}</p>
   </main>;
   return <div className={`flex flex-col bg-background text-foreground ${hasSidebar ? 'app-shell' : 'min-h-svh'}`}>
     {!isAuth && header}
-    {isHome ? <Website language={route.language} navigate={navigate} /> : interactive
-      ? <Identity route={route} navigate={navigate} loginControls={loginControls} />
+    {route.section === 'home' ? <Website language={route.language} navigate={navigate} />
+      : route.section === 'self-host' ? <SelfHost key={route.language} language={route.language} origin={origin} />
+      : interactive ? <Identity route={route} navigate={navigate} loginControls={loginControls} />
       : isAuth ? <AuthLayout controls={loginControls}><p role="status" className="text-muted">{route.language === 'en' ? 'Loading…' : '正在加载…'}</p></AuthLayout>
       : loadingPlaceholder}
     {!hasSidebar && !isAuth && <BrandFooter />}
