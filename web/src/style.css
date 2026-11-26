@@ -82,9 +82,12 @@
   .nt-authlayout__controls { margin-inline-start: auto; }
   .nt-authlayout__controls .niltavi-product-header { border: 0; background: transparent; }
   .nt-authlayout__controls .niltavi-project-brand { display: none; }
+  .nt-authlayout__controls .niltavi-product-header__control > svg { scale: calc(16 / 18); }
+  .nt-authlayout__controls .niltavi-product-header__control > svg,
+  .nt-authlayout__footer { color: var(--muted); opacity: .76; }
   .nt-authlayout__footer {
     display: flex; align-items: center; justify-content: flex-end; gap: calc(var(--spacing) * 3);
-    margin-block-start: auto; padding: calc(var(--spacing) * 4); color: var(--muted); opacity: .76;
+    margin-block-start: auto; padding: calc(var(--spacing) * 4);
   }
   .nt-authlayout__identity { display: grid; place-items: center; padding: var(--spacing); margin: calc(-1 * var(--spacing)); }
   .nt-authlayout__identity:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
