@@ -183,8 +183,9 @@ export function PasswordField({ label, error, rule, onInput, autoFocus, validate
   </TextField>;
 }
 
-export function CodeField({ label, error, onInput, onComplete, action }:
-  { label: string; error: string | undefined; onInput: () => void; onComplete?: (value: string) => void; action?: ReactNode }) {
+// Forms read the code through FormData, so the input must keep its name.
+export function CodeField({ label, error, onInput, onComplete, action, name = 'code' }:
+  { label: string; error: string | undefined; onInput: () => void; onComplete?: (value: string) => void; action?: ReactNode; name?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const id = useId();
   const errorId = `${id}-error`;
@@ -196,7 +197,7 @@ export function CodeField({ label, error, onInput, onComplete, action }:
       {action}
     </div>
     <InputOTP maxLength={6} value={value} isInvalid={Boolean(error)} onChange={v => { setValue(v); onInput(); if (v.length === 6) onComplete?.(v); }}
-      id={id} aria-invalid={Boolean(error)} aria-describedby={error ? errorId : undefined}>
+      id={id} name={name} autoComplete="one-time-code" aria-invalid={Boolean(error)} aria-describedby={error ? errorId : undefined}>
       <InputOTP.Group><InputOTP.Slot index={0} /><InputOTP.Slot index={1} /><InputOTP.Slot index={2} /></InputOTP.Group>
       <InputOTP.Separator />
       <InputOTP.Group><InputOTP.Slot index={3} /><InputOTP.Slot index={4} /><InputOTP.Slot index={5} /></InputOTP.Group>
