@@ -62,6 +62,8 @@ export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}
   const [pwEmailError, setPwEmailError] = useState<string>();
   const [pwMessage, setPwMessage] = useState<string>();
   const [pwPending, setPwPending] = useState(false);
+  const [factor, setFactor] = useState<'totp' | 'recovery'>();
+  const [factorError, setFactorError] = useState<string>();
   const pwBusy = useRef(false);
   const passwordless = interaction?.passwordless ?? settings?.passwordlessAvailable;
   const mode = passwordless ? chosenMode : 'password';
@@ -78,18 +80,21 @@ export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}
     setPwEmailError(undefined);
     setPwMessage(undefined);
     setInitialError(undefined);
+    setFactor(undefined);
+    setFactorError(undefined);
     task.setError(undefined);
   }
 
   async function submit(path: string, values: Record<string, string>) {
     if (!interaction) {
-      await call(path, values);
-      if (path !== '/account/login-code') await refresh();
-      return;
+      const result = await call<{ secondFactor?: boolean } | undefined>(path, values);
+      if (path !== '/account/login-code' && !result?.secondFactor) await refresh();
+      return result;
     }
     try {
-      const { continueTo } = await call<{ continueTo?: string }>(interaction.path, values);
-      if (continueTo) window.location.assign(continueTo);
+      const result = await call<{ continueTo?: string; secondFactor?: boolean }>(interaction.path, values);
+      if (result.continueTo) window.location.assign(result.continueTo);
+      return result;
     } catch (failure) {
       if (codeOf(failure) === 'interaction_expired') window.location.reload();
       throw failure;
@@ -107,14 +112,29 @@ export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}
     });
   }
 
-  const step = mode === 'password' ? 'password' : codeSentTo ? 'verify' : 'email';
+  function verifyFactor(value: string) {
+    setFactorError(undefined);
+    void task.run('factor', async () => {
+      try { await submit('/account/login-second-factor', { factor: value.trim() }); }
+      catch (failure) {
+        const code = codeOf(failure);
+        if (code === 'second_factor_expired') {
+          setFactor(undefined);
+          setPwMessage(problem(failure, language));
+        } else if (code === 'invalid_code') setFactorError(problem(failure, language));
+        else throw failure;
+      }
+    });
+  }
+
+  const step = factor ? 'factor' : mode === 'password' ? 'password' : codeSentTo ? 'verify' : 'email';
 
   if (!interaction && !settings) return <Lines />;
 
   return <div className="nt-auth nt-auth--signin nt-fade-up">
     <h1 className="nt-auth__title">{t('Sign in', '登录')}</h1>
     {initialError && <Notice status="danger">{problem(initialError, language)}</Notice>}
-    {mode === 'code' && <TaskFeedback task={task} />}
+    {(mode === 'code' || factor) && <TaskFeedback task={task} />}
     <div key={step} className="nt-fade-up">
       {step === 'password' && <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => {
         const field = readForm(event);
@@ -126,7 +146,8 @@ export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}
         setPwMessage(undefined);
         void (async () => {
           try {
-            await submit('/account/login', { email: field('email').trim(), password: field('password') });
+            const result = await submit('/account/login', { email: field('email').trim(), password: field('password') });
+            if (result?.secondFactor) { task.setError(undefined); setFactor('totp'); }
           } catch (failure) {
             if (codeOf(failure) === 'invalid_email') setPwEmailError(problem(failure, language));
             else setPwMessage(problem(failure, language));
@@ -147,6 +168,25 @@ export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}
         <PasswordField label={t('Password', '密码')} rule={{ minimum: 1, maximum: 256 }} error={pwMessage}
           onInput={() => setPwMessage(undefined)} autoComplete="current-password" validateOnSubmit />
         <Button type="submit" isPending={pwPending} className="w-full">{t('Sign in', '登录')}</Button>
+      </Form>}
+      {step === 'factor' && <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => {
+        event.preventDefault();
+        const value = factor === 'totp'
+          ? event.currentTarget.querySelector<HTMLInputElement>('.nt-auth__otp input')?.value
+          : readForm(event)('recovery');
+        if (value && (factor === 'recovery' || value.length === 6)) verifyFactor(value);
+      }}>
+        <p className="text-sm text-muted">{factor === 'totp'
+          ? t('Enter the 6-digit code from your authenticator app.', '请输入验证器应用中的 6 位验证码。')
+          : t('Enter one of your recovery codes. Each code works once.', '请输入一个恢复码。每个恢复码只能用一次。')}</p>
+        {factor === 'totp'
+          ? <CodeField label={t('Authenticator code', '验证器验证码')} error={factorError} onInput={() => setFactorError(undefined)} onComplete={verifyFactor} />
+          : <TextField name="recovery" autoComplete="off" isRequired isInvalid={Boolean(factorError)} onChange={() => setFactorError(undefined)}>
+            <Label>{t('Recovery code', '恢复码')}</Label>
+            <Input placeholder="abcde-23456" autoCapitalize="none" spellCheck={false} />
+            <FieldError>{factorError}</FieldError>
+          </TextField>}
+        <Button type="submit" className="w-full" isPending={task.pending === 'factor'}>{t('Sign in', '登录')}</Button>
       </Form>}
       {step === 'email' && <Form className="nt-auth__form" validationBehavior="native" onSubmit={event => {
         const email = readForm(event)('email').trim();
@@ -179,17 +219,23 @@ export function SignIn({ interaction }: { interaction?: SignInInteraction } = {}
         <SentTo label={t('Code sent to', '验证码已发送至')} value={codeSentTo!} onEdit={() => { setCodeSentTo(undefined); setCodeError(undefined); task.setError(undefined); }} />
         <CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)}
           onComplete={verifyCode}
-          action={<ResendCodeButton isPending={task.pending === 'resend'} onResend={() => void task.run('resend', () =>
-            submit('/account/login-code', { email: codeSentTo!, ...codeFields }))} />} />
+          action={<ResendCodeButton isPending={task.pending === 'resend'} onResend={() => void task.run('resend', async () => {
+            await submit('/account/login-code', { email: codeSentTo!, ...codeFields });
+          })} />} />
         <Button type="submit" className="w-full" isPending={task.pending === 'verify'}>{t('Sign in', '登录')}</Button>
       </Form>}
     </div>
     <div className="nt-auth__alt">
-      <p className="nt-auth__links">
+      {factor ? <p className="nt-auth__links">
+        <Link href="#" onClick={event => { event.preventDefault(); setFactorError(undefined); setFactor(f => f === 'totp' ? 'recovery' : 'totp'); }}>
+          {factor === 'totp' ? t('Use a recovery code', '使用恢复码') : t('Use authenticator app', '使用验证器')}</Link>
+        <span aria-hidden="true">·</span>
+        <Link href="#" onClick={event => { event.preventDefault(); setFactor(undefined); setFactorError(undefined); task.setError(undefined); }}>{t('Back', '返回')}</Link>
+      </p> : <p className="nt-auth__links">
         {passwordless && <Link href="#" onClick={event => { event.preventDefault(); switchMode(); }}>{mode === 'code' ? t('Use password', '使用密码登录') : t('Use a code', '使用验证码登录')}</Link>}
         {mode === 'password' && <>{passwordless && <span aria-hidden="true">·</span>}<PageLink to={{ section: 'recover' }}>{t('Forgot password?', '忘记密码')}</PageLink></>}
-      </p>
-      {register && <p className="nt-auth__links">{t('New here?', '还没有账号？')}{register}</p>}
+      </p>}
+      {register && !factor && <p className="nt-auth__links">{t('New here?', '还没有账号？')}{register}</p>}
     </div>
   </div>;
 }

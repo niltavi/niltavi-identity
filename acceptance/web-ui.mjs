@@ -103,7 +103,12 @@ async function signIn(page, person, path = '/login') {
   await page.getByLabel('Email').fill(person.email);
   await page.getByLabel('Password').fill(person.password);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await page.getByRole('heading', { level: 1, name: 'Account center' }).waitFor();
+  // An account with two-step verification asks for the authenticator code after the password.
+  const factor = page.locator('.nt-auth__otp input');
+  const center = page.getByRole('heading', { level: 1, name: 'Account center' });
+  await factor.or(center).first().waitFor();
+  if (await factor.isVisible()) await factor.pressSequentially(await authenticatorCode());
+  await center.waitFor();
 }
 
 async function setupLink() {

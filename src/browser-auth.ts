@@ -1,4 +1,4 @@
-import { randomBytes, randomInt, randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool, PoolClient } from 'pg';
 import { digest, readBrowserCookie, setBrowserCookie } from './browser-cookie.js';
@@ -62,7 +62,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     const current = await web.viewer(request);
     if (current) {
       const { key: _key, sessionId: _session, ...account } = current;
-      return { account };
+      return { account: { ...account, recoveryCodesLeft: account.secondFactorEnabled ? await recoveryCodesLeft(account.id) : 0 } };
     }
     if (web.cookieKey(request)) web.clear(reply);
     return failure(reply, 401, 'sign_in_required');
@@ -215,6 +215,7 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       await audit(pool, 'account.sign_in_failed', account?.id ?? 'unknown', account?.id);
       return failure(reply, 401, 'invalid_credentials');
     }
+    if (account.second_factor) return challengeSecondFactor(reply, account);
     const token = await transaction(pool, async (db) => {
       const live = await db.query('SELECT 1 FROM accounts WHERE id = $1 AND enabled AND security_epoch = $2 FOR UPDATE',
         [account.id, account.security_epoch]);
@@ -225,6 +226,13 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     if (!token) return failure(reply, 401, 'invalid_credentials');
     web.grant(reply, token);
     return reply.code(204).send();
+  });
+
+  app.post('/account/login-second-factor', guard, async (request, reply) => {
+    const result = await completeSecondFactor(request, reply);
+    if (!result) return reply;
+    web.grant(reply, result.token);
+    return reply.code(200).send({ recoveryCodesLeft: result.recoveryCodesLeft });
   });
 
   app.post('/account/logout', guard, async (request, reply) => {
@@ -694,6 +702,84 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     return revoked ? reply.code(204).send() : failure(reply, 404, 'token_not_found');
   });
 
+  // A password is only the first step for an account with two-step verification. Signing in with
+  // an email code counts as both steps, because the same mailbox can reset the password anyway.
+  const challengeCookie = '__Host-niltavi-sign-in-2fa';
+  const challengeSeconds = 300;
+  async function challengeSecondFactor(reply: FastifyReply, account: { id: string; security_epoch: number }, uid?: string) {
+    const token = randomBytes(32).toString('base64url');
+    await pool.query('DELETE FROM login_challenges WHERE expires_at <= now()');
+    await pool.query(`INSERT INTO login_challenges (token_digest, account_id, account_epoch, interaction_uid, expires_at)
+      VALUES ($1, $2, $3, $4, now() + $5 * interval '1 second')`,
+    [web.keyFor(token), account.id, account.security_epoch, uid ?? null, challengeSeconds]);
+    setBrowserCookie(reply, challengeCookie, token, challengeSeconds);
+    return reply.code(200).send({ secondFactor: true });
+  }
+
+  // Accepts a code from the authenticator or one unused recovery code, then opens the session.
+  async function completeSecondFactor(request: FastifyRequest, reply: FastifyReply, uid?: string, client?: string) {
+    const [code] = fields(request, 'factor') ?? [];
+    const cookie = readBrowserCookie(request, challengeCookie);
+    if (!cookie || !code) { failure(reply, 400, 'second_factor_expired'); return undefined; }
+    const key = web.keyFor(cookie);
+    const challenge = (await pool.query<{ account_id: string; account_epoch: number }>(
+      `UPDATE login_challenges SET attempts = attempts + 1
+        WHERE token_digest = $1 AND expires_at > now() AND attempts < $2 AND interaction_uid IS NOT DISTINCT FROM $3
+        RETURNING account_id, account_epoch`, [key, codeAttempts, uid ?? null])).rows[0];
+    if (!challenge) {
+      setBrowserCookie(reply, challengeCookie, '', 0);
+      failure(reply, 400, 'second_factor_expired');
+      return undefined;
+    }
+    const { account_id: id, account_epoch: epoch } = challenge;
+    const recovery = recoveryValue(code);
+    let usedRecovery = false;
+    let accepted = false;
+    if (/^\d{6}$/.test(code.trim())) accepted = await secondFactor(id, code.trim(), true);
+    else if (recovery && await rateAllowed(pool, [[`recovery:${id}`, 5]])) {
+      accepted = usedRecovery = Boolean((await pool.query(
+        'UPDATE recovery_codes SET used_at = now() WHERE account_id = $1 AND code_digest = $2 AND used_at IS NULL',
+        [id, recoveryKey(id, recovery)])).rowCount);
+    }
+    if (!accepted) {
+      await audit(pool, 'account.sign_in_failed', id, id);
+      failure(reply, 400, 'invalid_code');
+      return undefined;
+    }
+    const token = await transaction(pool, async (db) => {
+      if (!(await db.query('DELETE FROM login_challenges WHERE token_digest = $1', [key])).rowCount) return undefined;
+      const live = await db.query(`SELECT 1 FROM accounts WHERE id = $1 AND enabled AND security_epoch = $2
+        AND totp_confirmed_at IS NOT NULL FOR UPDATE`, [id, epoch]);
+      if (!live.rowCount) return undefined;
+      await audit(db, 'account.signed_in', id, id, client);
+      if (usedRecovery) await audit(db, 'account.recovery_code_used', id, id);
+      const issued = await web.issue(db, id, epoch, request);
+      await db.query('UPDATE web_sessions SET second_factor_at = now() WHERE token_digest = $1', [web.keyFor(issued)]);
+      return issued;
+    });
+    setBrowserCookie(reply, challengeCookie, '', 0);
+    if (!token) { failure(reply, 400, 'second_factor_expired'); return undefined; }
+    return { id, epoch, token, recoveryCodesLeft: await recoveryCodesLeft(id) };
+  }
+
+  // Recovery codes look like abcde-23456. Only a keyed digest is stored.
+  const recoveryAlphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
+  const recoveryKey = (account: string, code: string) => createHmac('sha256', encryptionKey).update(`recovery:${account}:${code}`).digest('base64url');
+  function recoveryValue(code: string) {
+    const value = code.toLowerCase().replace(/[\s-]/g, '');
+    return /^[a-hjkmnp-z2-9]{10}$/.test(value) ? value : undefined;
+  }
+  async function issueRecoveryCodes(db: PoolClient, account: string) {
+    const codes = Array.from({ length: 10 }, () => Array.from({ length: 10 }, () => recoveryAlphabet[randomInt(recoveryAlphabet.length)]).join(''));
+    await db.query('DELETE FROM recovery_codes WHERE account_id = $1', [account]);
+    for (const code of codes) await db.query('INSERT INTO recovery_codes (account_id, code_digest) VALUES ($1, $2)', [account, recoveryKey(account, code)]);
+    return codes.map(code => `${code.slice(0, 5)}-${code.slice(5)}`);
+  }
+  async function recoveryCodesLeft(account: string) {
+    return (await pool.query<{ count: number }>('SELECT count(*)::int AS count FROM recovery_codes WHERE account_id = $1 AND used_at IS NULL',
+      [account])).rows[0]?.count ?? 0;
+  }
+
   const sealLabel = (account: string) => `totp:${account}`;
   async function secondFactor(account: string, code: string | undefined, confirmed: boolean) {
     if (!code || !await rateAllowed(pool, [[`totp:${account}`, 5]])) return false;
@@ -725,9 +811,12 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     const viewer = await web.viewer(request);
     if (!viewer) return failure(reply, 401, 'sign_in_required');
     if (!await secondFactor(viewer.id, fields(request, 'code')?.[0], false)) return failure(reply, 400, 'invalid_code');
-    await pool.query('UPDATE web_sessions SET second_factor_at = now() WHERE token_digest = $1', [viewer.key]);
-    await audit(pool, 'account.second_factor_enabled', viewer.id, viewer.id);
-    return reply.code(204).send();
+    const recoveryCodes = await transaction(pool, async (db) => {
+      await db.query('UPDATE web_sessions SET second_factor_at = now() WHERE token_digest = $1', [viewer.key]);
+      await audit(db, 'account.second_factor_enabled', viewer.id, viewer.id);
+      return issueRecoveryCodes(db, viewer.id);
+    });
+    return { recoveryCodes };
   });
 
   app.post('/account/second-factor/verify', guard, async (request, reply) => {
@@ -798,6 +887,8 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       if (!row) return false;
       await db.query('UPDATE accounts SET totp_secret = NULL, totp_confirmed_at = NULL, totp_last_step = NULL WHERE id = $1', [viewer.id]);
       await db.query('UPDATE web_sessions SET second_factor_at = NULL WHERE account_id = $1', [viewer.id]);
+      await db.query('DELETE FROM recovery_codes WHERE account_id = $1', [viewer.id]);
+      await db.query('DELETE FROM login_challenges WHERE account_id = $1', [viewer.id]);
       await audit(db, 'account.second_factor_removed', viewer.id, viewer.id);
       return true;
     });
@@ -855,5 +946,5 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       return result ? { enabled: result.enabled, changed: result.changed } : failure(reply, 403, 'account_not_managed');
     });
   }
-  return { requestLoginCode, verifyLoginCode, passwordlessAvailable: mailer.codes, registerAccount, pendingEnrollment, verifyEnrollment, resendEnrollment };
+  return { requestLoginCode, verifyLoginCode, challengeSecondFactor, completeSecondFactor, passwordlessAvailable: mailer.codes, registerAccount, pendingEnrollment, verifyEnrollment, resendEnrollment };
 }
