@@ -51,7 +51,7 @@ export async function audit(db: Queryable, action: string, target: string, actor
 
 const migrationFiles = ['schema.sql', 'schema-browser.sql', 'schema-enrollment.sql', 'schema-registration-intents.sql',
   'schema-teams.sql', 'schema-email-codes.sql', 'schema-registration-policy.sql', 'schema-application-branding.sql',
-  'schema-disable-2fa-codes.sql'];
+  'schema-disable-2fa-codes.sql', 'schema-login-second-factor.sql'];
 export const schemaVersion = migrationFiles.length;
 
 // Serialize first-account ownership, operator provisioning and registration policy changes.
@@ -214,8 +214,8 @@ export function loginRateAllowed(pool: Pool, source: string, email: string, purp
 }
 
 export async function getLogin(pool: Pool, email: string) {
-  return (await pool.query<{ id: string; security_epoch: number; enabled: boolean; password_hash: string | null }>(
-    'SELECT id, security_epoch, enabled, password_hash FROM accounts WHERE email = $1', [email],
+  return (await pool.query<{ id: string; security_epoch: number; enabled: boolean; password_hash: string | null; second_factor: boolean }>(
+    'SELECT id, security_epoch, enabled, password_hash, totp_confirmed_at IS NOT NULL AS second_factor FROM accounts WHERE email = $1', [email],
   )).rows[0];
 }
 

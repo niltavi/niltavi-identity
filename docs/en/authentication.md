@@ -12,6 +12,8 @@ One password rule applies everywhere: 12 to 256 characters counted by character,
 
 An application identifies an account by the pair `(issuer, sub)`. The email address is a contact detail. It must not be used as a key, and two records with the same address must not be merged because of it.
 
+An account can turn on two-step verification with an authenticator app (TOTP). A password sign-in on such an account then asks for a code from the app, or for one of ten recovery codes shown once when two-step verification is turned on. Each recovery code works once. When they run out, the user turns two-step verification off and on again, which links the authenticator again and issues new codes; existing codes cannot be topped up. Signing in with an email code does not ask for the second step, because the same mailbox can reset the password anyway. The second step needs the page script: a plain form post without it is refused.
+
 An address is verified by a code or a link mailed to it, or by an instance administrator. An unverified account can sign in and use its personal space. It cannot accept a team invitation and cannot recover its password by mail.
 
 ## Signing in through an application
@@ -96,7 +98,7 @@ Without outgoing mail:
 
 The first completed self-service registration on a fresh instance creates the instance owner. Later registrations create regular accounts. The operator can also provision the owner through the setup wizard or CLI. Administrators register applications, manage accounts and change instance settings in the console at `/admin`.
 
-An administrator can read the console after signing in. Any change requires a second factor (TOTP) that is enabled on the account and confirmed for the current session. Without it the console is read-only.
+An administrator can read the console after signing in. Any change requires a second factor (TOTP) that is enabled on the account and confirmed for the current session. A session opened with the second step is already confirmed. Without it the console is read-only.
 
 Registration starts open. Administrators can restrict it to team invitations or close it. The policy applies when the account is created, including when someone submits an email code issued before a policy change.
 

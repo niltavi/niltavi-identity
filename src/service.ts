@@ -418,6 +418,13 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     }
     const promptResult = details.prompt.name === 'create' ? { create: {} } : {};
     if (!native && fields(request, 'email')) return browserAuth.requestLoginCode(request, reply, details.uid);
+    const client = typeof details.params.client_id === 'string' ? details.params.client_id : undefined;
+    if (!native && fields(request, 'factor')) {
+      const result = await browserAuth.completeSecondFactor(request, reply, details.uid, client);
+      if (!result) return reply;
+      if (!store.remember(result.id, result.epoch) || !await store.isEnabled(result.id)) return failure(reply, 400, 'second_factor_expired');
+      return completeBrowserSignIn(request, reply, result.id, result.token, promptResult);
+    }
     if (!native && fields(request, 'code')) {
       const result = await browserAuth.verifyLoginCode(request, reply, details.uid);
       if (!result) return reply;
@@ -442,6 +449,8 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
       await audit(pool, 'account.sign_in_failed', account?.id ?? 'unknown', account?.id);
       return rejected(401, 'invalid_credentials');
     }
+    // The second step needs the page script, so a plain form post cannot finish it.
+    if (account.second_factor) return native ? rejected(401, 'invalid_credentials') : browserAuth.challengeSecondFactor(reply, account, details.uid);
     // The same sign-in also opens the account center in this browser.
     const token = await transaction(pool, async (db) => {
       const live = await db.query('SELECT 1 FROM accounts WHERE id = $1 AND enabled AND security_epoch = $2 FOR UPDATE',

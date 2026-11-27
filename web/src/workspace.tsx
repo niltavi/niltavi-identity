@@ -531,17 +531,19 @@ function Security() {
   const [codeError, setCodeError] = useState<string>();
   const [disableOpen, setDisableOpen] = useState(false);
   const [disableStep, setDisableStep] = useState<{ email?: string }>();
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>();
   if (!account) return null;
-  const submitCode = (path: string, done: string, after?: () => void) => (event: Parameters<typeof readForm>[0]) => {
+  const submitCode = (path: string, done: string, after?: (result?: { recoveryCodes?: string[] }) => void) => (event: Parameters<typeof readForm>[0]) => {
     const code = readForm(event)('code').trim();
     setCodeError(undefined);
     void task.run('code', async () => {
-      try { await call(path, { code }); }
+      let result: { recoveryCodes?: string[] } | undefined;
+      try { result = await call<{ recoveryCodes?: string[] } | undefined>(path, { code }); }
       catch (failure) {
         if (codeOf(failure) !== 'invalid_code') throw failure;
         return setCodeError(problem(failure, language));
       }
-      after?.();
+      after?.(result);
       await refresh();
       return done;
     });
@@ -550,6 +552,18 @@ function Security() {
   if (account.secondFactorEnabled) {
     const pending = task.pending === 'code';
     body = <>
+      {recoveryCodes ? <div className="grid max-w-md gap-3" data-recovery-codes>
+        <p className="text-sm">{t('Save these recovery codes somewhere safe. Each one signs you in once if you lose your authenticator. They are shown only now.',
+          '请把这些恢复码保存在安全的地方。验证器丢失时，每个恢复码可以代替验证码登录一次。它们只显示这一次。')}</p>
+        <ul className="grid grid-cols-2 gap-x-6 gap-y-1 font-mono text-sm">{recoveryCodes.map(code => <li key={code}>{code}</li>)}</ul>
+        <div className="flex flex-wrap gap-2">
+          <CopyButton value={recoveryCodes.join('\n')} label={t('Copy codes', '复制恢复码')} />
+          <Button size="sm" onPress={() => setRecoveryCodes(undefined)}>{t('I have saved them', '我已保存')}</Button>
+        </div>
+      </div> : account.recoveryCodesLeft === 0 ? <Notice status="warning">{t(
+        'No recovery codes are left. Turn two-step verification off and on again to link your authenticator again and get new recovery codes.',
+        '恢复码已用完。请关闭两步验证后重新开启，重新绑定验证器并获取新的恢复码。')}</Notice>
+        : <p className="text-sm text-muted">{t(`${account.recoveryCodesLeft} recovery codes left.`, `还剩 ${account.recoveryCodesLeft} 个恢复码。`)}</p>}
       <div className="flex flex-wrap items-center gap-3">
         <State color="success">{t('On', '已开启')}</State>
         <Modal isOpen={disableOpen} onOpenChange={open => {
@@ -610,7 +624,10 @@ function Security() {
         <CopyButton value={setup.secret} label={t('Copy key', '复制密钥')} />
       </div>
       <Form className="grid max-w-sm gap-3" validationBehavior="native"
-        onSubmit={submitCode('/account/second-factor/enable', t('Two-step verification is on.', '两步验证已开启。'), () => setSetup(undefined))}>
+        onSubmit={submitCode('/account/second-factor/enable', t('Two-step verification is on.', '两步验证已开启。'), result => {
+          setSetup(undefined);
+          setRecoveryCodes(result?.recoveryCodes);
+        })}>
         <CodeField label={t('6-digit code from the app', '应用中显示的 6 位验证码')} error={codeError} onInput={() => setCodeError(undefined)} />
         <div className="flex flex-wrap gap-2">
           <Button type="submit" isPending={task.pending === 'code'}>{t('Turn on', '开启两步验证')}</Button>
@@ -652,7 +669,7 @@ function Security() {
       </Form>
     </Panel>
     <Panel title={t('Two-step verification', '两步验证')}
-      description={t('A code from an authenticator app, asked for when you change instance settings.', '来自验证器应用的验证码，在更改实例设置时需要输入。')}>
+      description={t('A code from an authenticator app, asked for after your password when you sign in and before you change instance settings.', '来自验证器应用的验证码。用密码登录时，以及更改实例设置前需要输入。')}>
       {!disableOpen && <TaskFeedback task={task} />}
       {body}
     </Panel>

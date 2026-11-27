@@ -3,7 +3,7 @@ import type { Language } from './site';
 export type Account = {
   id: string; email: string; emailVerified: boolean; name: string | null; locale: Language | null;
   instanceRole: 'owner' | 'admin' | null; secondFactorEnabled: boolean; secondFactorVerified: boolean;
-  deletionRequested: boolean; signedInAt: string; expiresAt: string; activeSessions: number;
+  deletionRequested: boolean; signedInAt: string; expiresAt: string; activeSessions: number; recoveryCodesLeft: number;
 };
 export type RegistrationPolicy = 'open' | 'invite' | 'closed';
 
@@ -83,6 +83,7 @@ const problems: Record<string, [string, string]> = {
   delivery_unavailable: ['This instance cannot send mail. Ask an administrator to verify your address.', '此实例无法发信，请联系管理员为你验证邮箱。'],
   invalid_token_request: ['Check the name, application, team, and validity.', '请检查名称、应用、团队和有效期。'],
   token_not_found: ['This token has already been revoked.', '此令牌已撤销。'],
+  second_factor_expired: ['This sign-in has expired. Enter your email and password again.', '本次登录已过期，请重新输入邮箱和密码。'],
   second_factor_enabled: ['Two-step verification is already on.', '两步验证已开启。'],
   second_factor_required: ['Enter a code from your authenticator app to make changes.', '请输入验证器中的验证码后再进行更改。'],
   second_factor_not_enabled: ['Turn on two-step verification to make changes.', '请先开启两步验证再进行更改。'],
