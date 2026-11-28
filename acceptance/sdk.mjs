@@ -327,9 +327,19 @@ try {
   const anyone = new Browser();
   const asAgent = await anyone.api(`${b.origin}/api/me`, bearer(agent.token));
   assert.equal(asAgent.status, 200);
-  assert.deepEqual({ ...asAgent.data, kind: 'session', tokenId: null, teams: me[b.id].teams }, me[b.id]);
+  assert.deepEqual({ ...asAgent.data, kind: 'session', tokenId: null, agent: null, teams: me[b.id].teams }, me[b.id]);
   assert.deepEqual(asAgent.data.teams, [me[b.id].team]);
   assert.equal(asAgent.data.tokenId, agent.id);
+  assert.equal(asAgent.data.agent, 'member');
+  // A team token acts as the team itself: no person stands behind it, and it carries the role it was issued with.
+  const teamToken = await mabel.account(`/account/orgs/${team.id}/tokens`, { name: 'Nightly import', app: b.id, role: 'member', days: '30' });
+  assert.equal(teamToken.status, 201);
+  const asTeam = await anyone.api(`${b.origin}/api/me`, bearer(teamToken.data.token));
+  assert.equal(asTeam.status, 200);
+  assert.deepEqual([asTeam.data.kind, asTeam.data.agent, asTeam.data.sub, asTeam.data.name, asTeam.data.email, asTeam.data.tokenId],
+    ['agent', 'team', `team:${team.id}`, 'Nightly import', '', teamToken.data.id]);
+  assert.deepEqual(asTeam.data.teams, [{ ...me[b.id].team, role: 'member' }]);
+  assert.equal((await anyone.api(`${a.origin}/api/me`, bearer(teamToken.data.token))).status, 401);
   assert.equal((await anyone.api(`${a.origin}/api/me`, bearer(agent.token))).status, 401);
   assert.equal((await anyone.api(`${b.origin}/api/me`, bearer(`nvt_${'A'.repeat(43)}`))).status, 401);
   assert.equal((await anyone.api(`${b.origin}/settings`, bearer(agent.token))).status, 200);

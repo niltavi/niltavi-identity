@@ -14,13 +14,16 @@ const contentTypes: Readonly<Record<string, string>> = {
 };
 
 export const protocolPageCsp = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'";
-export type ProtocolView = 'login' | 'register' | 'recover' | 'logout' | 'signed-out' | 'expired';
+// Signed-in pages show the logos applications chose for themselves, from wherever those are hosted.
+const consoleCsp = protocolPageCsp.replace("img-src 'self' data:", "img-src 'self' data: https:");
+export type ProtocolView = 'login' | 'register' | 'recover' | 'logout' | 'signed-out' | 'expired' | 'denied' | 'second-factor';
 export type ProtocolOptions = {
   invalid?: boolean; throttled?: boolean; form?: string; registration?: string | undefined; recover?: string | undefined;
   language?: 'en' | 'zh-CN'; appName?: string | undefined; appUrl?: string | undefined;
   signInName?: string | undefined; signInLogoUrl?: string | undefined;
   passwordless?: boolean;
   interactionPath?: string; loginPath?: string;
+  team?: string | undefined; secondFactorEnabled?: boolean | undefined;
 };
 const attribute = (value: string) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
@@ -40,12 +43,20 @@ export async function registerBrowserPage(app: FastifyInstance, issuer: URL) {
       const path = pagePath(language, section);
       const html = (await readFile(new URL(section + '.' + language + '.html', root), 'utf8'))
         .replaceAll('__IDENTITY_ORIGIN__', issuer.origin);
-      const send = async (_request: unknown, reply: FastifyReply) => reply.header('content-security-policy', `${protocolPageCsp}; form-action 'self'`)
+      const signedIn = section === 'workspace' || section === 'admin';
+      const send = async (_request: unknown, reply: FastifyReply) => reply
+        .header('content-security-policy', `${signedIn ? consoleCsp : protocolPageCsp}; form-action 'self'`)
         .type('text/html; charset=utf-8').send(html);
       app.get(path, send);
       // The account center and the instance console keep their open tab in the path.
-      if (section === 'workspace' || section === 'admin') app.get(path + '/:tab', send);
-      if (section === 'workspace') app.get(path + '/settings/account', send);
+      if (signedIn) app.get(path + '/:tab', send);
+      if (section === 'workspace') {
+        // Kept for links from before the account pages were merged. The page rewrites them.
+        app.get(path + '/settings/account', send);
+        // A team an account manages has its own pages under the team's ID.
+        app.get(path + '/teams/:team', send);
+        app.get(path + '/teams/:team/:page', send);
+      }
     }
   }
   app.get('/zh', async (_request, reply) => reply.redirect('/zh/', 308));
@@ -73,6 +84,7 @@ export async function registerBrowserPage(app: FastifyInstance, issuer: URL) {
       'sign-in-name': options.signInName, 'sign-in-logo-url': options.signInLogoUrl,
       passwordless: options.passwordless ? 'true' : undefined,
       'interaction-path': options.interactionPath, 'login-path': options.loginPath,
+      team: options.team, 'second-factor': options.secondFactorEnabled === undefined ? undefined : String(options.secondFactorEnabled),
     }).flatMap(([name, value]) => value === undefined ? [] : [` data-${name}="${attribute(value)}"`]).join('');
     return page.replace('<html lang="en">', () => `<html lang="${options.language ?? 'en'}">`)
       .replace(mount, () => `${options.form ? `<div hidden>${options.form}</div>` : ''}<div id="root"${data}></div>`);

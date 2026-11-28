@@ -138,7 +138,8 @@ A principal looks like this:
   "locale": null,
   "teams": [{ "id": "…", "name": "Harbour Team", "role": "admin", "personal": false }],
   "team": { "id": "…", "name": "Harbour Team", "role": "admin", "personal": false },
-  "tokenId": null
+  "tokenId": null,
+  "agent": null
 }
 ```
 
@@ -189,6 +190,8 @@ Both values are fixed product behaviour. The `checkIntervalSeconds` and `outageG
 ## Agent access tokens
 
 A person creates an Agent access token in the Identity account center for one application and one team, and gives it to an MCP client or a command-line tool. The caller sends `Authorization: Bearer nvt_…`. The same guards accept it and return a principal with `kind: "agent"`, the same `sub` as the person's browser sign-in, and the token's team as `team` and the only entry of `teams`.
+
+A team's owner or admin can also create a team token, which acts as the team itself instead of as a person. The guards accept it the same way. Its principal has `agent: "team"`, a `sub` of `team:<team id>`, the token's name as `name`, an empty `email`, and the team with the role chosen for the token. A member's token has `agent: "member"`. Check `agent` before you attribute an action to a person.
 
 The SDK verifies a token with Identity and remembers a valid one for up to 60 seconds, so a revoked token stops working within a minute. A token made for another application is refused. The 5-minute rule above applies to tokens the SDK has already seen.
 

@@ -4,6 +4,7 @@ import { isPublicSection } from '../../src/browser-routes';
 import { Admin } from './admin';
 import { call, codeOf } from './api';
 import type { Account, Settings } from './api';
+import { pageTitle } from './pages';
 import { Invite, Recover, Register, Reset, SignIn, VerifyEmail, arrive, rememberReturn } from './auth';
 import { SelfHost, deploymentCopy } from './self-host';
 import { Setup } from './setup';
@@ -16,9 +17,9 @@ import { Workspace } from './workspace';
 export { ProtocolPage } from './protocol';
 
 const titles: Partial<Record<Route['section'], [string, string]>> = {
-  login: ['Sign in', '登录'], register: ['Create an account', '创建账号'], workspace: ['Account center', '账号中心'],
+  login: ['Sign in', '登录'], register: ['Create an account', '创建账号'],
   recover: ['Reset your password', '重置密码'], reset: ['Choose a new password', '设置新密码'], 'verify-email': ['Verify your email', '验证邮箱'],
-  invite: ['Team invitation', '团队邀请'], setup: ['Set up Niltavi Identity', '初始化 Niltavi Identity'], admin: ['Instance console', '实例管理台'],
+  invite: ['Team invitation', '团队邀请'], setup: ['Set up Niltavi Identity', '初始化 Niltavi Identity'],
 };
 
 export function pageMetadata({ language, section }: Route) {
@@ -93,15 +94,23 @@ export function BrowserApp({ initial, origin }: { initial: Route; origin: string
   const [interactive, setInteractive] = useState(false);
   const navigate = useCallback<Navigate>((next, replace) => {
     const path = pathFor(next);
-    if (path === window.location.pathname + window.location.search) return;
+    if (path === window.location.pathname + window.location.search + window.location.hash) return;
     window.history[replace ? 'replaceState' : 'pushState'](null, '', path);
-    setRoute(routeFor(window.location.pathname, window.location.search));
+    setRoute(routeFor(window.location.pathname, window.location.search, window.location.hash));
     if (!replace) window.scrollTo(0, 0);
   }, []);
 
   useEffect(() => {
     setInteractive(true);
-    const update = () => setRoute(routeFor(window.location.pathname, window.location.search));
+    const update = () => {
+      const { pathname, search, hash } = window.location;
+      const current = routeFor(pathname, search, hash);
+      // An address from before the pages moved is rewritten in place, so the back button skips it.
+      if ((current.section === 'workspace' || current.section === 'admin') && pathFor(current) !== pathname + search + hash) {
+        window.history.replaceState(null, '', pathFor(current));
+      }
+      setRoute(current);
+    };
     update();
     window.addEventListener('popstate', update);
     return () => window.removeEventListener('popstate', update);
@@ -111,7 +120,7 @@ export function BrowserApp({ initial, origin }: { initial: Route; origin: string
     const metadata = pageMetadata(route);
     const title = titles[route.section]?.[route.language === 'en' ? 0 : 1];
     document.documentElement.lang = route.language;
-    document.title = title ? `${title} · Niltavi Identity` : metadata.title;
+    document.title = pageTitle(route) ?? (title ? `${title} · Niltavi Identity` : metadata.title);
     document.querySelector('meta[name=description]')?.setAttribute('content', metadata.description);
     document.querySelector('link[rel=canonical]')?.setAttribute('href', new URL(pathFor({ language: route.language, section: route.section }), window.location.origin).href);
     for (const alternate of document.querySelectorAll<HTMLLinkElement>('link[rel=alternate][hreflang]')) {

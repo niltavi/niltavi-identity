@@ -8,7 +8,7 @@ import { openClientSecret } from './credentials.js';
 import { audit, rateAllowed } from './database.js';
 import type { Application } from './database.js';
 import type { ProtocolStore } from './protocol-store.js';
-import { orgsFor } from './teams.js';
+import { entry, orgsFor } from './teams.js';
 import { failure, fields } from './web-session.js';
 
 export const serviceTokenSeconds = 300;
@@ -59,8 +59,10 @@ export async function registerApplicationApi(app: FastifyInstance, pool: Pool, i
     if (!client) return reply;
     const [sub, sid] = fields(request, 'sub', 'sid') ?? [];
     if (!sub || !sid) return failure(reply, 400, 'invalid_request');
-    const current = await store.sessionActive(sub, client.id, sid) ? await account(sub) : undefined;
-    return current ? { active: true, account: current, orgs: await orgsFor(pool, sub) } : { active: false };
+    // A team's application is for the team's members, and it learns about that team only.
+    const current = await store.sessionActive(sub, client.id, sid) && await entry(pool, sub, client, true) === 'allowed'
+      ? await account(sub) : undefined;
+    return current ? { active: true, account: current, orgs: await orgsFor(pool, sub, client.org_id) } : { active: false };
   });
 
   app.post('/apps/agent-token', async (request, reply) => {
@@ -68,17 +70,26 @@ export async function registerApplicationApi(app: FastifyInstance, pool: Pool, i
     if (!client) return reply;
     const [token] = fields(request, 'token') ?? [];
     if (!token || !/^nvt_[\w-]{43}$/.test(token)) return { active: false };
-    // The token is bound to one application and one team, and follows the account's membership.
-    const found = (await pool.query<{ id: string; account_id: string; org_id: string; name: string; role: string; personal: boolean }>(
-      `UPDATE agent_tokens t SET last_used_at = now() FROM memberships m, orgs o, accounts a
+    // The token is bound to one application and one team. A team's application takes tokens of that team only.
+    const found = (await pool.query<{ id: string; label: string; account_id: string | null; org_id: string; name: string; role: string; personal: boolean }>(
+      `UPDATE agent_tokens t SET last_used_at = now() FROM orgs o
        WHERE t.token_digest = $1 AND t.app_id = $2 AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > now())
-         AND a.id = t.account_id AND a.enabled AND m.org_id = t.org_id AND m.account_id = t.account_id AND o.id = t.org_id
-       RETURNING t.id, t.account_id, t.org_id, o.name, m.role, o.personal_account_id IS NOT NULL AS personal`,
-      [digest(token), client.id])).rows[0];
-    const owner = found && await account(found.account_id);
-    if (!found || !owner) return { active: false };
-    return { active: true, token_id: found.id, account: owner,
-      org: { org_id: found.org_id, name: found.name, role: found.role, personal: found.personal } };
+         AND o.id = t.org_id AND ($3::text IS NULL OR t.org_id = $3)
+       RETURNING t.id, t.name AS label, t.account_id, t.org_id, o.name, t.role, o.personal_account_id IS NOT NULL AS personal`,
+      [digest(token), client.id, client.org_id])).rows[0];
+    if (!found) return { active: false };
+    // A team token acts as the team itself, with the role it was issued with.
+    if (!found.account_id) {
+      return { active: true, kind: 'team', token_id: found.id, token_name: found.label, account: null,
+        org: { org_id: found.org_id, name: found.name, role: found.role, personal: false } };
+    }
+    // A member's token follows the account and its membership.
+    const role = (await pool.query<{ role: string }>(
+      'SELECT role FROM memberships WHERE org_id = $1 AND account_id = $2', [found.org_id, found.account_id])).rows[0]?.role;
+    const owner = role && await account(found.account_id);
+    if (!owner) return { active: false };
+    return { active: true, kind: 'member', token_id: found.id, account: owner,
+      org: { org_id: found.org_id, name: found.name, role, personal: found.personal } };
   });
 
   // Short-lived proof of the calling application, for another Niltavi service to verify against the JWKS.
@@ -86,7 +97,10 @@ export async function registerApplicationApi(app: FastifyInstance, pool: Pool, i
     const client = await caller(request, reply);
     if (!client) return reply;
     const [audience] = fields(request, 'audience') ?? [];
-    const target = audience && (await pool.query('SELECT 1 FROM applications WHERE id = $1 AND enabled', [audience])).rowCount;
+    // A team's application reaches instance applications and its own team's, never another team's.
+    const target = audience && (await pool.query(
+      'SELECT 1 FROM applications WHERE id = $1 AND enabled AND ($2::text IS NULL OR org_id IS NULL OR org_id = $2)',
+      [audience, client.org_id])).rowCount;
     if (!audience || !target) return failure(reply, 400, 'invalid_audience');
     const token = await new SignJWT({ client_id: client.id, scope: 'service' })
       .setProtectedHeader({ alg: 'RS256', kid: signing.kid, typ: 'at+jwt' })

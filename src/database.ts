@@ -19,6 +19,7 @@ export interface Application {
   backchannel_logout: string;
   resource: string;
   secret_ciphertext: string;
+  org_id: string | null;
 }
 
 export function connect(connectionString: string) {
@@ -44,13 +45,18 @@ export async function transaction<T>(pool: Pool, work: (client: PoolClient) => P
 
 // Audit rows name the action, the affected record and the acting account. Never pass a
 // password, code, token or request parameter as the target or the detail.
-export async function audit(db: Queryable, action: string, target: string, actor?: string, detail?: string) {
-  if (actor) await db.query('INSERT INTO audit_events (action, target, actor, detail) VALUES ($1, $2, $3, $4)', [action, target, actor, detail ?? null]);
-  else await db.query('INSERT INTO audit_events (action, target, detail) VALUES ($1, $2, $3)', [action, target, detail ?? null]);
+// Pass the team for anything a team administrator should find in the team's own log.
+export async function audit(db: Queryable, action: string, target: string, actor?: string, detail?: string, org?: string | null) {
+  if (actor) {
+    await db.query('INSERT INTO audit_events (action, target, actor, detail, org_id) VALUES ($1, $2, $3, $4, $5)',
+      [action, target, actor, detail ?? null, org ?? null]);
+  } else {
+    await db.query('INSERT INTO audit_events (action, target, detail, org_id) VALUES ($1, $2, $3, $4)', [action, target, detail ?? null, org ?? null]);
+  }
 }
 
 const migrationFiles = ['schema.sql', 'schema-browser.sql', 'schema-enrollment.sql', 'schema-registration-intents.sql',
-  'schema-teams.sql', 'schema-email-codes.sql', 'schema-registration-policy.sql', 'schema-application-branding.sql'];
+  'schema-teams.sql', 'schema-email-codes.sql', 'schema-registration-policy.sql', 'schema-application-branding.sql', 'schema-team-admin.sql'];
 export const schemaVersion = migrationFiles.length;
 
 // Serialize first-account ownership, operator provisioning and registration policy changes.
@@ -229,7 +235,16 @@ export function standardApplication(id: string, name: string, home: string): App
     backchannel: `${origin}/auth/notifications`, resource: `${origin}/api` };
 }
 
-export async function registerApplication(pool: Pool, key: Buffer, spec: ApplicationSpec, actor?: string) {
+export type TeamApplicationPolicy = { enabled: boolean; limit: number; privateNetwork: boolean };
+export const teamApplicationDefaults: TeamApplicationPolicy = { enabled: true, limit: 10, privateNetwork: false };
+
+// Whether teams may register their own applications, how many each, and whether those may live on a private network.
+export async function teamApplicationPolicy(db: Queryable): Promise<TeamApplicationPolicy> {
+  return { ...teamApplicationDefaults, ...await getSetting<Partial<TeamApplicationPolicy>>(db, 'team_applications') };
+}
+
+// An application registered with a team belongs to that team: only its members can enter it.
+export async function registerApplication(pool: Pool, key: Buffer, spec: ApplicationSpec, actor?: string, org?: string) {
   const { id } = spec;
   const name = spec.name.trim();
   if (!/^[a-z0-9][a-z0-9-]{2,63}$/.test(id)) throw new Error('Use a lowercase client ID of 3–64 characters.');
@@ -240,50 +255,83 @@ export async function registerApplication(pool: Pool, key: Buffer, spec: Applica
   if (urls.some((url) => url.origin !== origin)) throw new Error('The application URLs must use the same origin.');
   const secret = randomBytes(32).toString('base64url');
   return transaction(pool, async (db) => {
+    if (org) {
+      // The team row is the lock, so two concurrent registrations cannot both pass the limit.
+      await db.query('SELECT 1 FROM orgs WHERE id = $1 FOR UPDATE', [org]);
+      const policy = await teamApplicationPolicy(db);
+      if (!policy.enabled) throw new Error('team_applications_disabled');
+      const used = Number((await db.query<{ count: number }>('SELECT count(*)::int AS count FROM applications WHERE org_id = $1', [org])).rows[0]?.count);
+      if (used >= policy.limit) throw new Error('application_limit');
+    }
     const inserted = await db.query(
-      `INSERT INTO applications (id, callback, post_logout, backchannel_logout, resource, home_url, name, secret_ciphertext)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT DO NOTHING RETURNING id`,
-      [id, ...urls.map((url) => url.href), name, sealClientSecret(id, secret, key)],
+      `INSERT INTO applications (id, callback, post_logout, backchannel_logout, resource, home_url, name, secret_ciphertext, org_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) ON CONFLICT DO NOTHING RETURNING id`,
+      [id, ...urls.map((url) => url.href), name, sealClientSecret(id, secret, key), org ?? null],
     );
     if (!inserted.rowCount) throw new Error('An application already uses this client ID or endpoint.');
-    await audit(db, 'application.registered', id, actor);
+    await audit(db, 'application.registered', id, actor, undefined, org);
     return { client_id: id, client_secret: secret };
   });
 }
 
-export async function rotateApplicationSecret(pool: Pool, key: Buffer, id: string, actor?: string) {
+// The changes below take the owning team when a team administrator makes them, so one team
+// cannot reach another team's application or an instance application by guessing its ID.
+const owned = 'id = $1 AND ($2::text IS NULL OR org_id = $2)';
+
+export async function rotateApplicationSecret(pool: Pool, key: Buffer, id: string, actor?: string, org?: string) {
   const secret = randomBytes(32).toString('base64url');
   return transaction(pool, async (db) => {
-    const changed = await db.query('UPDATE applications SET secret_ciphertext = $2 WHERE id = $1', [id, sealClientSecret(id, secret, key)]);
+    const changed = await db.query<{ org_id: string | null }>(
+      `UPDATE applications SET secret_ciphertext = $3 WHERE ${owned} RETURNING org_id`, [id, org ?? null, sealClientSecret(id, secret, key)]);
     if (!changed.rowCount) throw new Error('Application does not exist.');
-    await audit(db, 'application.secret_rotated', id, actor);
+    await audit(db, 'application.secret_rotated', id, actor, undefined, changed.rows[0]?.org_id);
     return { client_id: id, client_secret: secret };
   });
 }
 
-export async function setApplicationBranding(pool: Pool, id: string, name: string, logo: string, actor?: string) {
+export async function setApplicationBranding(pool: Pool, id: string, name: string, logo: string, actor?: string, org?: string) {
   const signInName = name.trim();
   if ([...signInName].length > 80) throw new Error('Give the sign-in name at most 80 characters.');
   const signInLogoUrl = logo.trim() ? httpsUrl(logo.trim(), 'Sign-in logo URL').href : null;
   return transaction(pool, async (db) => {
-    const updated = await db.query('UPDATE applications SET sign_in_name = $2, sign_in_logo_url = $3 WHERE id = $1',
-      [id, signInName || null, signInLogoUrl]);
+    const updated = await db.query<{ org_id: string | null }>(
+      `UPDATE applications SET sign_in_name = $3, sign_in_logo_url = $4 WHERE ${owned} RETURNING org_id`,
+      [id, org ?? null, signInName || null, signInLogoUrl]);
     if (!updated.rowCount) return false;
-    await audit(db, 'application.branding_updated', id, actor);
+    await audit(db, 'application.branding_updated', id, actor, undefined, updated.rows[0]?.org_id);
     return true;
   });
 }
 
-export async function setApplicationEnabled(pool: Pool, id: string, enabled: boolean, actor?: string) {
+export async function setApplicationEnabled(pool: Pool, id: string, enabled: boolean, actor?: string, org?: string) {
   return transaction(pool, async (db) => {
-    const changed = await db.query('UPDATE applications SET enabled = $2 WHERE id = $1 AND enabled <> $2', [id, enabled]);
-    if (changed.rowCount) await audit(db, enabled ? 'application.enabled' : 'application.disabled', id, actor);
+    const changed = await db.query<{ org_id: string | null }>(
+      `UPDATE applications SET enabled = $3 WHERE ${owned} AND enabled <> $3 RETURNING org_id`, [id, org ?? null, enabled]);
+    if (changed.rowCount) await audit(db, enabled ? 'application.enabled' : 'application.disabled', id, actor, undefined, changed.rows[0]?.org_id);
     return { changed: Boolean(changed.rowCount) };
   });
 }
 
+// Removes an application and everything issued for it. The caller holds any team lock it needs.
+export async function removeApplications(db: Queryable, ids: string[]) {
+  if (!ids.length) return;
+  await db.query("DELETE FROM oidc_records WHERE payload ->> 'clientId' = ANY($1::text[])", [ids]);
+  await db.query('DELETE FROM applications WHERE id = ANY($1::text[])', [ids]);
+}
+
+export async function deleteApplication(pool: Pool, id: string, actor?: string, org?: string) {
+  return transaction(pool, async (db) => {
+    const found = (await db.query<{ org_id: string | null }>(`SELECT org_id FROM applications WHERE ${owned} FOR UPDATE`, [id, org ?? null])).rows[0];
+    if (!found) return false;
+    await removeApplications(db, [id]);
+    await audit(db, 'application.deleted', id, actor, undefined, found.org_id);
+    return true;
+  });
+}
+
 export async function listApplications(pool: Pool) {
-  return (await pool.query<Application>('SELECT * FROM applications ORDER BY id')).rows;
+  return (await pool.query<Application & { team: string | null }>(
+    'SELECT p.*, o.name AS team FROM applications p LEFT JOIN orgs o ON o.id = p.org_id ORDER BY p.id')).rows;
 }
 
 const linkSeconds = { reset: 1_800, verify: 86_400 } as const;

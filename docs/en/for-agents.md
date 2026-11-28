@@ -24,7 +24,7 @@ Compose waits for PostgreSQL and applies the schema migrations before starting I
 
 On a fresh instance, open `/register` and create the owner's account. The first completed registration becomes the instance owner. Keep the instance behind a private listener or ingress until the intended owner has registered. With mail delivery already configured, registration completes when the owner confirms the email code.
 
-The owner can sign in and open `/admin` immediately. To change instance settings, first enable and confirm a second factor under **Account → Security**. Use the instance console to configure outgoing mail and choose whether registration is open, invite-only, or closed.
+The owner can sign in and open `/admin` immediately. To change instance settings, first enable and confirm a second factor under **Account → Sign-in and security**. Use the instance console to configure outgoing mail and choose whether registration is open, invite-only, or closed.
 
 The optional setup wizard creates the owner and lets them test SMTP in the same flow. To use it, print a one-time link and give it to the owner. The link is valid for one hour.
 
@@ -58,7 +58,7 @@ The Discovery response should list the exact issuer, `S256`, the JWKS URL, and `
 
 ## Connect an application
 
-Register each application once with its ID, display name and home URL. The response contains the application credentials. Capture them privately and store them with the application's other server secrets. An administrator can do the same in the instance console. A registration takes effect immediately.
+Register each application once with its ID, display name and home URL. The response contains the application credentials. Capture them privately and store them with the application's other server secrets. An administrator can do the same in the instance console. A registration takes effect immediately. An application registered this way is open to every account on the instance. A team's owners and admins can register an application for their own team under the team's **Applications** page, which needs no access to the instance.
 
 ```sh
 (umask 077; docker compose -p niltavi-identity -f compose.service.yaml exec -T identity \

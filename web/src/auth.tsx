@@ -16,7 +16,7 @@ function pendingInvitation() {
 }
 
 export function rememberReturn(route: Route) {
-  try { window.sessionStorage.setItem(returnKey, JSON.stringify({ section: route.section, tab: route.tab, team: route.team })); }
+  try { window.sessionStorage.setItem(returnKey, JSON.stringify({ section: route.section, tab: route.tab, team: route.team, page: route.page, hash: route.hash })); }
   catch { /* the account center is the fallback */ }
 }
 
@@ -28,7 +28,7 @@ export function arrive(language: Language, navigate: Navigate) {
     window.sessionStorage.removeItem(returnKey);
   } catch { /* the account center is the fallback */ }
   navigate(back.section === 'admin' || back.section === 'workspace'
-    ? { language, section: back.section, tab: back.tab, team: back.team } : { language, section: 'workspace' }, true);
+    ? { language, section: back.section, tab: back.tab, team: back.team, page: back.page, hash: back.hash } : { language, section: 'workspace' }, true);
 }
 
 function Narrow({ title, children }: { title: string; children: ReactNode }) {

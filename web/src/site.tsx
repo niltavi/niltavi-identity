@@ -1,4 +1,4 @@
-import { Link, RouterProvider, buttonVariants } from '@heroui/react';
+import { Chip, Link, RouterProvider, buttonVariants } from '@heroui/react';
 import { useLayoutEffect, useState } from 'react';
 import type { ComponentProps, MouseEvent } from 'react';
 import { isPublicSection, pagePath, pageSections, publicSections } from '../../src/browser-routes';
@@ -10,7 +10,10 @@ import type { ProductTheme } from '../vendor/niltavi-ui/product/theme';
 export const container = 'niltavi-container';
 export const repository = 'https://github.com/niltavi/niltavi-identity';
 export type { Language } from '../../src/browser-routes';
-export type Route = { language: Language; section: Section; tab?: string | undefined; team?: string | undefined; accountManagement?: boolean };
+// `team` and `page` address the pages of one team. `hash` is a section of the account page.
+export type Route = {
+  language: Language; section: Section; tab?: string | undefined; team?: string | undefined; page?: string | undefined; hash?: string | undefined;
+};
 export type Navigate = (route: Route, replace?: boolean) => void;
 
 const chineseDescriptionLead = 'AI 时代的用户身份认证基础设施。';
@@ -37,21 +40,35 @@ export const copy = {
 
 const tabbed = (section: Section) => section === 'workspace' || section === 'admin';
 
-export function pathFor({ language, section, tab, team, accountManagement }: Route) {
+export function pathFor({ language, section, tab, team, page, hash }: Route) {
+  const inTeam = section === 'workspace' && tab === 'teams' && team;
   return pagePath(language, section) + (tabbed(section) && tab ? '/' + tab : '') +
-    (section === 'workspace' && tab === 'settings' && accountManagement ? '/account' : '') +
-    (section === 'workspace' && tab === 'teams' && team ? '?team=' + encodeURIComponent(team) : '');
+    (inTeam ? '/' + encodeURIComponent(team) + (page ? '/' + page : '') : '') + (tabbed(section) && hash ? '#' + hash : '');
 }
 
-export function routeFor(path: string, search = ''): Route {
+// Addresses from before the account pages were merged keep working: each maps to where its content lives now.
+const moved: Record<string, Pick<Route, 'tab' | 'hash'>> = {
+  applications: {}, sessions: { tab: 'account', hash: 'sessions' }, security: { tab: 'account', hash: 'security' },
+  settings: { tab: 'account' },
+};
+const name = /^[a-z-]{1,24}$/;
+const identifier = /^[\w-]{1,64}$/;
+
+export function routeFor(path: string, search = '', fragment = ''): Route {
   const segments = path.split('/').filter(Boolean);
   const language = segments[0] === 'zh' ? 'zh-CN' : 'en';
-  const [name, tab, subpage] = segments.slice(language === 'zh-CN' ? 1 : 0);
-  const section = pageSections.find((known) => known === name) ?? 'home';
-  const team = new URLSearchParams(search).get('team') ?? undefined;
-  return { language, section, ...(tabbed(section) && tab && /^[a-z-]{1,24}$/.test(tab) ? { tab } : {}),
-    ...(section === 'workspace' && tab === 'settings' && subpage === 'account' ? { accountManagement: true } : {}),
-    ...(section === 'workspace' && tab === 'teams' && team && /^[\w-]{1,64}$/.test(team) ? { team } : {}) };
+  const [first, tab, third, fourth] = segments.slice(language === 'zh-CN' ? 1 : 0);
+  const section = pageSections.find((known) => known === first) ?? 'home';
+  if (!tabbed(section) || !tab || !name.test(tab)) return { language, section };
+  const hash = name.test(fragment.replace(/^#/, '')) ? fragment.replace(/^#/, '') : undefined;
+  if (section === 'workspace' && tab in moved) {
+    return { language, section, ...moved[tab], ...(tab === 'settings' && third === 'account' ? { hash: 'delete' } : {}) };
+  }
+  if (section === 'workspace' && tab === 'teams') {
+    const team = third ?? new URLSearchParams(search).get('team') ?? undefined;
+    return { language, section, tab, ...(team && identifier.test(team) ? { team, ...(fourth && name.test(fourth) ? { page: fourth } : {}) } : {}) };
+  }
+  return { language, section, tab, ...(hash ? { hash } : {}) };
 }
 
 export function followRoute(event: MouseEvent<Element>, route: Route, navigate?: Navigate) {
@@ -105,13 +122,13 @@ export function BrandHeader({ route, navigate, onLanguage }:
   const publicPage = isPublicSection(section);
   const { theme, toggle } = useTheme();
   const labels = copy[language];
-  const brandRoute = { language, section: section === 'workspace' || section === 'admin' ? 'workspace' : 'home' } as const;
+  const brandRoute = { language, section: section === 'workspace' || section === 'admin' ? section : 'home' } as const;
   const locales = ([['en', 'English'], ['zh-CN', '简体中文']] as const).map(([locale, label]) =>
     ({ locale, label, href: onLanguage ? '#' + locale : pathFor({ ...route, language: locale }) }));
   function navigateHref(href: string) {
     if (onLanguage && href.startsWith('#')) return onLanguage(href === '#zh-CN' ? 'zh-CN' : 'en');
     const destination = new URL(href, window.location.href);
-    if (destination.origin === window.location.origin && navigate) navigate(routeFor(destination.pathname, destination.search));
+    if (destination.origin === window.location.origin && navigate) navigate(routeFor(destination.pathname, destination.search, destination.hash));
     else window.location.assign(href);
   }
   const header = <ProductHeader
@@ -127,6 +144,11 @@ export function BrandHeader({ route, navigate, onLanguage }:
         aria-current={section === page ? 'page' : false}
         className={buttonVariants({ size: 'sm', variant: section === page ? 'secondary' : 'ghost' })}>{labels[page]}</RouteLink>)}
     </nav>}
+    {/* Says which role this screen acts in. Only the console carries it, so its absence means "your own account".
+        A phone has no room for it beside the wordmark, so there the console shows it above the page heading. */}
+    {section === 'admin' && <Chip size="sm" variant="soft" color="accent" className="identity-area-tag hidden sm:inline-flex">
+      <Chip.Label>{language === 'en' ? 'Instance console' : '实例管理台'}</Chip.Label>
+    </Chip>}
   </ProductHeader>;
   return navigate ? <RouterProvider navigate={navigateHref}>{header}</RouterProvider> : header;
 }
