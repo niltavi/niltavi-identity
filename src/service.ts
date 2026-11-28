@@ -166,6 +166,7 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
       signInName: requester?.sign_in_name ?? undefined, signInLogoUrl: requester?.sign_in_logo_url ?? undefined,
       registration: canRegister ? interactionPath + '/register' : undefined,
       passwordless: await browserAuth.passwordlessAvailable(),
+      interactionSeconds: oidcInteractionSeconds,
     };
   }
   async function sendInteraction(request: FastifyRequest, reply: FastifyReply, details: AuthDetails, view: 'login' | 'register' | 'recover', status = 200) {
@@ -223,7 +224,7 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
       short: { httpOnly: true, sameSite: 'lax', secure: true },
     },
     ttl: {
-      AccessToken: 300, AuthorizationCode: 60, IdToken: 300, Interaction: registrationEnabled ? oidcInteractionSeconds : 120,
+      AccessToken: 300, AuthorizationCode: 60, IdToken: 300, Interaction: oidcInteractionSeconds,
       Grant: 43_200, RefreshToken: 43_200, Session: 43_200,
     },
     // Authorization code with PKCE is the only way in. Discovery advertises nothing else.

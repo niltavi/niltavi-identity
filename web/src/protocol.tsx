@@ -14,6 +14,7 @@ export type ProtocolData = {
   language: Language; appName?: string | undefined; appUrl?: string | undefined;
   signInName?: string | undefined; signInLogoUrl?: string | undefined;
   interactionPath: string | undefined; loginPath: string | undefined; recoverPath: string | undefined;
+  interactionSeconds?: number | undefined;
 };
 const languageKey = 'identity.protocol-language';
 const refreshAccount = () => call<{ account: Account }>('/account/session').then(result => result.account, () => null);
@@ -64,6 +65,11 @@ export function ProtocolPage({ data }: { data: ProtocolData }) {
     window.addEventListener('popstate', update);
     return () => window.removeEventListener('popstate', update);
   }, [interactionPath, loginPath, registration, recoverPath]);
+  useEffect(() => {
+    if (!data.interactionSeconds || !interactionPath) return;
+    const id = setTimeout(() => setView('expired'), data.interactionSeconds * 1000);
+    return () => clearTimeout(id);
+  }, [data.interactionSeconds, interactionPath]);
   function choose(next: Language) {
     try { window.sessionStorage.setItem(languageKey, next); } catch { /* the choice lasts for this page only */ }
     setLanguage(next);

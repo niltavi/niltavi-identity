@@ -21,6 +21,7 @@ export type ProtocolOptions = {
   signInName?: string | undefined; signInLogoUrl?: string | undefined;
   passwordless?: boolean;
   interactionPath?: string; loginPath?: string;
+  interactionSeconds?: number;
 };
 const attribute = (value: string) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
@@ -73,6 +74,7 @@ export async function registerBrowserPage(app: FastifyInstance, issuer: URL) {
       'sign-in-name': options.signInName, 'sign-in-logo-url': options.signInLogoUrl,
       passwordless: options.passwordless ? 'true' : undefined,
       'interaction-path': options.interactionPath, 'login-path': options.loginPath,
+      'interaction-seconds': options.interactionSeconds != null ? String(options.interactionSeconds) : undefined,
     }).flatMap(([name, value]) => value === undefined ? [] : [` data-${name}="${attribute(value)}"`]).join('');
     return page.replace('<html lang="en">', () => `<html lang="${options.language ?? 'en'}">`)
       .replace(mount, () => `${options.form ? `<div hidden>${options.form}</div>` : ''}<div id="root"${data}></div>`);

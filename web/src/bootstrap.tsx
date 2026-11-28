@@ -13,6 +13,7 @@ if (view === 'login' || view === 'register' || view === 'recover' || view === 'l
     language: data.language === 'zh-CN' ? 'zh-CN' : 'en', appName: data.appName, appUrl: data.appUrl,
     signInName: data.signInName, signInLogoUrl: data.signInLogoUrl,
     interactionPath: data.interactionPath, loginPath: data.loginPath, recoverPath: data.recover,
+    interactionSeconds: data.interactionSeconds ? Number(data.interactionSeconds) : undefined,
   }} />);
 } else {
   // The prerendered markup knows the section only. The open tab is applied after hydration.
