@@ -11,19 +11,22 @@ import Provider, { errors, interactionPolicy } from 'oidc-provider';
 import type { AdapterPayload, Configuration } from 'oidc-provider';
 import { Agent } from 'undici';
 import type { Pool } from 'pg';
+import { sweepDeletions } from './account-deletion.js';
 import { registerAdmin } from './admin-api.js';
 import { registerApplicationApi } from './apps-api.js';
 import { registerBrowserAuth } from './browser-auth.js';
 import { protocolPageCsp, registerBrowserPage } from './browser-page.js';
 import type { ProtocolOptions, ProtocolView } from './browser-page.js';
-import { assertSchema, audit, getLogin, loginRateAllowed, transaction } from './database.js';
+import { assertSchema, audit, getLogin, loginRateAllowed, teamApplicationPolicy, transaction } from './database.js';
 import type { Application } from './database.js';
 import { normalizeEmail, openClientSecret, passwordHash, verifyAccountPassword } from './credentials.js';
 import { createMailer } from './mail.js';
 import { createNotifier } from './notify.js';
 import { createProtocolStore } from './protocol-store.js';
+import { publicHost } from './outbound.js';
 import { registerSetup } from './setup.js';
-import { orgsFor, registerTeams } from './teams.js';
+import { registerTeamAdmin } from './team-admin.js';
+import { entry, orgsFor, registerTeams } from './teams.js';
 import { createWebSessions, failure, fields } from './web-session.js';
 import { beginRegistrationIntent, intentDigest, oidcInteractionSeconds, validInteractionUid } from './registration-intent.js';
 import { registrationPolicy } from './registration.js';
@@ -59,6 +62,15 @@ function plainPage(view: ProtocolView, { invalid, form, registration, recover, l
       <button type="submit" form="op.logoutForm" name="logout" value="yes">${text('Sign out', '退出')}</button>`, language);
   }
   if (view === 'signed-out') return page(text('Signed out', '已退出'), '', language);
+  if (view === 'denied') {
+    return page(text('This application is for members of its team', '这个应用只对所属团队的成员开放'),
+      `<p>${text('Ask an administrator of the team to invite you.', '请联系团队管理员邀请你加入。')}</p>`, language);
+  }
+  if (view === 'second-factor') {
+    return page(text('Two-step verification', '两步验证'),
+      `<p>${text('This team asks for two-step verification. Confirm it in your account, then open the application again.',
+        '这个团队要求两步验证。请先在账号页完成验证，再重新打开应用。')}</p>`, language);
+  }
   return page(text('This sign-in request has expired', '登录请求已过期'),
     `<p>${text('Start again from the application.', '请回到应用重新发起登录。')}</p>` +
     (app && appUrl ? `<a href="${escape(appUrl)}">${text(`Return to ${app}`, `返回 ${app}`)}</a>` : ''), language);
@@ -207,7 +219,29 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     };
     wire.fetch = (url, options) => outbound(String(url), options as RequestInit);
   }
+  else {
+    // A team chooses where its application is notified. Unless the instance allows a private
+    // network, that address has to resolve to the public internet every time it is called.
+    outbound = async (url, init) => {
+      const team = (await pool.query('SELECT 1 FROM applications WHERE backchannel_logout = $1 AND org_id IS NOT NULL', [url])).rowCount;
+      if (team && !(await teamApplicationPolicy(pool)).privateNetwork && !await publicHost(new URL(url).hostname)) {
+        throw new Error('A team application cannot be notified at a private address.');
+      }
+      return globalThis.fetch(url, { ...init, redirect: 'error' });
+    };
+    wire.fetch = (url, options) => outbound(String(url), options as RequestInit);
+  }
   const notifier = await createNotifier(pool, issuer, signing, outbound);
+
+  // The team an application belongs to, or null for an instance application.
+  const teamOf = async (id?: string) => id ? (await registered(id))?.org_id ?? null : null;
+  // Whether the account may enter the application from this browser. The second factor counts
+  // only when it was confirmed on the account-center session of the same account.
+  async function admission(request: Pick<IncomingMessage, 'headers'>, account: string, target: Application) {
+    if (!target.org_id) return 'allowed' as const;
+    const viewer = await web.viewer({ headers: request.headers } as FastifyRequest);
+    return entry(pool, account, target, viewer?.id === account && viewer.secondFactorVerified);
+  }
 
   const policy = interactionPolicy.base();
   if (registrationEnabled) policy.add(new interactionPolicy.Prompt({ name: 'create', requestable: true }), 0);
@@ -269,7 +303,7 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
         },
       },
     },
-    async findAccount(_ctx, id) {
+    async findAccount(ctx, id, token) {
       const account = (await pool.query<{ email: string; email_verified: boolean; security_epoch: number; name: string | null; locale: string | null }>(
         `SELECT email, email_verified_at IS NOT NULL AS email_verified, security_epoch, display_name AS name, locale
          FROM accounts WHERE id = $1 AND enabled`, [id])).rows[0];
@@ -278,15 +312,20 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
         return { accountId: id, claims: async () => ({
           sub: id, email: account.email, email_verified: account.email_verified,
           name: account.name ?? account.email.split('@')[0], ...(account.locale ? { locale: account.locale } : {}),
-          orgs: await orgsFor(pool, id),
+          orgs: await orgsFor(pool, id, await teamOf(ctx.oidc?.client?.clientId ?? (token as { clientId?: string } | undefined)?.clientId)),
         }) };
       }
     },
     async loadExistingGrant(ctx) {
       const { client, session, result } = ctx.oidc;
-      const entry = client && await registered(client.clientId);
-      if (!session?.accountId || !entry) return;
-      const id = result?.consent?.grantId ?? session.grantIdFor(entry.id);
+      const app = client && await registered(client.clientId);
+      if (!session?.accountId || !app) return;
+      // No grant for an account that may not enter: the request then stops at Identity's own page.
+      if (await admission(ctx.req, session.accountId, app) !== 'allowed') return;
+      await pool.query(`INSERT INTO application_accounts (app_id, account_id) VALUES ($1, $2)
+        ON CONFLICT (app_id, account_id) DO UPDATE SET last_seen_at = now()
+        WHERE application_accounts.last_seen_at < now() - interval '1 hour'`, [app.id, session.accountId]).catch(() => undefined);
+      const id = result?.consent?.grantId ?? session.grantIdFor(app.id);
       const existing = id && await provider.Grant.find(id);
       // Registered applications are first-party, so the identity scopes they ask for are granted without a consent page.
       const requested = identityScopes.filter((scope) => ctx.oidc.requestParamScopes.has(scope));
@@ -300,10 +339,10 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
         return existing;
       }
       // A fresh grant must not reactivate an application's previous session ID.
-      if (id) session.sidFor(entry.id, randomUUID());
-      const grant = new provider.Grant({ clientId: entry.id, accountId: session.accountId });
+      if (id) session.sidFor(app.id, randomUUID());
+      const grant = new provider.Grant({ clientId: app.id, accountId: session.accountId });
       grant.addOIDCScope(['openid', ...requested].join(' '));
-      grant.addResourceScope(entry.resource, 'read');
+      grant.addResourceScope(app.resource, 'read');
       await grant.save();
       return grant;
     },
@@ -351,6 +390,7 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
   });
   const browserAuth = await registerBrowserAuth(app, { pool, issuer, web, mailer, notifier, store, encryptionKey, backupHash, realm, registrationEnabled });
   registerTeams(app, pool, issuer, web, mailer, notifier);
+  registerTeamAdmin(app, pool, web, encryptionKey);
   registerAdmin(app, pool, issuer, web, mailer, notifier, encryptionKey);
   registerSetup(app, pool, web, mailer, backupHash);
   await registerApplicationApi(app, pool, issuer, store, encryptionKey, signing);
@@ -388,6 +428,7 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     if (!details || details.uid !== request.params.uid || !validInteractionUid(details.uid)) return sendExpired(request, reply, request.params.uid);
     if (await completedRegistration(request, details.uid)) return reply.redirect('/interaction/' + details.uid + '/registered', 303);
     if (details.prompt.name === 'create') return reply.redirect('/interaction/' + details.uid + '/register', 303);
+    if (details.prompt.name === 'consent') return sendAdmission(request, reply, details);
     if (details.prompt.name !== 'login') return reply.code(400).send({ error: 'unexpected_interaction' });
     // A browser already signed in to Identity continues without typing anything, unless the
     // application asked for a fresh sign-in.
@@ -395,14 +436,34 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     if (viewer && await store.isEnabled(viewer.id)) return finish(request, reply, details, viewer.id);
     return sendInteraction(request, reply, details, 'login');
   }));
-  async function completeBrowserSignIn(request: FastifyRequest, reply: FastifyReply, account: string, token: string, result: Record<string, unknown>) {
+  // Reached when the account is signed in but may not enter the application yet: it is not a
+  // member of the application's team, or the team asks for a second factor this session lacks.
+  async function sendAdmission(request: FastifyRequest, reply: FastifyReply, details: AuthDetails & { session?: { accountId: string } | undefined }) {
+    const target = typeof details.params.client_id === 'string' ? await registered(details.params.client_id) : undefined;
+    const account = details.session?.accountId;
+    if (!target || !account) return reply.code(400).send({ error: 'unexpected_interaction' });
+    const viewer = await web.viewer(request);
+    const same = viewer?.id === account ? viewer : undefined;
+    const state = await entry(pool, account, target, Boolean(same?.secondFactorVerified));
+    if (state === 'allowed') return finish(request, reply, details, account);
+    // The second factor is confirmed on the account-center session. Without one, sign in first.
+    if (state === 'second_factor' && !same) return sendInteraction(request, reply, details, 'login');
+    const team = (await pool.query<{ name: string }>('SELECT name FROM orgs WHERE id = $1', [target.org_id])).rows[0]?.name;
+    if (protocolUi) reply.header('content-security-policy', protocolPageCsp);
+    reply.header('referrer-policy', 'same-origin');
+    const language = preferred(request, details.params.ui_locales);
+    return reply.code(state === 'not_member' ? 403 : 200).type('text/html').send(render(state === 'not_member' ? 'denied' : 'second-factor', {
+      language, appName: target.name, appUrl: target.home_url, team, interactionPath: '/interaction/' + details.uid,
+      secondFactorEnabled: same?.secondFactorEnabled }));
+  }
+  async function completeBrowserSignIn(request: FastifyRequest, reply: FastifyReply, account: string, token: string | undefined, result: Record<string, unknown>) {
     let target: URL;
     try {
       const resume = await provider.interactionResult(request.raw, reply.raw, { login: { accountId: account }, ...result }, { mergeWithLastSubmission: false });
       target = new URL(resume, issuer);
     } catch { return failure(reply, 409, 'interaction_expired'); }
     if (target.origin !== issuer.origin || !target.pathname.startsWith('/auth/')) return failure(reply, 409, 'interaction_expired');
-    web.grant(reply, token);
+    if (token) web.grant(reply, token);
     return { continueTo: target.pathname + target.search };
   }
   app.post<{ Params: { uid: string } }>('/interaction/:uid', async (request, reply) => store.request(async () => {
@@ -413,10 +474,18 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     const native = body instanceof URLSearchParams;
     if (!native && request.headers['content-type']?.split(';', 1)[0] !== 'application/json') return failure(reply, 415, 'json_required');
     const details = await provider.interactionDetails(request.raw, reply.raw).catch(() => undefined);
-    if (!details || details.uid !== request.params.uid || !['login', 'create'].includes(details.prompt.name)) {
+    if (!details || details.uid !== request.params.uid || !['login', 'create', 'consent'].includes(details.prompt.name)) {
       return native ? sendExpired(request, reply, request.params.uid) : failure(reply, 409, 'interaction_expired');
     }
     const promptResult = details.prompt.name === 'create' ? { create: {} } : {};
+    // The code a team's application waits for. It is confirmed on the browser's own session.
+    const [secondFactor] = native ? [] : fields(request, 'secondFactor') ?? [];
+    if (secondFactor !== undefined) {
+      const viewer = await web.viewer(request);
+      if (!viewer || viewer.id !== details.session?.accountId) return failure(reply, 409, 'interaction_expired');
+      if (!await browserAuth.confirmSecondFactor(viewer, secondFactor)) return failure(reply, 400, 'invalid_code');
+      return completeBrowserSignIn(request, reply, viewer.id, undefined, {});
+    }
     if (!native && fields(request, 'email')) return browserAuth.requestLoginCode(request, reply, details.uid);
     if (!native && fields(request, 'code')) {
       const result = await browserAuth.verifyLoginCode(request, reply, details.uid);
@@ -518,6 +587,12 @@ async function application(pool: Pool, issuer: URL, tls: IdentityTls, realm?: st
     },
     handler: () => undefined,
   });
-  app.addHook('onClose', async () => { await loopback?.close(); });
+  // Requested deletions run out here. Several instances may run this: each account row is locked as it goes.
+  const sweep = setInterval(() => { void sweepDeletions(pool, notifier).catch(() => undefined); }, 600_000);
+  sweep.unref();
+  app.addHook('onClose', async () => {
+    clearInterval(sweep);
+    await loopback?.close();
+  });
   return app;
 }

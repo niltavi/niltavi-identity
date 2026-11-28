@@ -1,15 +1,15 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Pool } from 'pg';
+import { deleteAccount } from './account-deletion.js';
 import {
-  applyAccountEnabled, audit, getSetting, lockInstanceAdministration, markEmailVerified, operatorResetLink, registerApplication, rotateApplicationSecret,
-  setApplicationBranding, setApplicationEnabled, setInstanceRole, setSetting, standardApplication, transaction,
+  applyAccountEnabled, audit, lockInstanceAdministration, markEmailVerified, operatorResetLink, registerApplication, rotateApplicationSecret,
+  setApplicationBranding, setApplicationEnabled, setInstanceRole, setSetting, standardApplication, teamApplicationPolicy, transaction,
 } from './database.js';
 import { PasswordRejected, passwordHash, passwordProblem } from './credentials.js';
 import type { Mailer } from './mail.js';
 import type { Notifier } from './notify.js';
 import { registrationPolicy } from './registration.js';
 import { beginMailTest, confirmMailTest, mailFields } from './setup.js';
-import { leaveAllTeams } from './teams.js';
 import { failure, fields } from './web-session.js';
 import type { Viewer, WebSessions } from './web-session.js';
 
@@ -48,6 +48,7 @@ export function registerAdmin(app: FastifyInstance, pool: Pool, issuer: URL, web
               (SELECT count(*)::int FROM applications) AS applications,
               (SELECT count(*)::int FROM accounts WHERE deletion_requested_at IS NOT NULL AND deleted_at IS NULL) AS "deletionRequests"`)).rows[0];
     return { counts, mail: await mailer.status(), registration: await registrationPolicy(pool),
+      teamApplications: await teamApplicationPolicy(pool),
       canWrite: viewer.secondFactorVerified, secondFactorEnabled: viewer.secondFactorEnabled, role: viewer.instanceRole };
   });
 
@@ -140,25 +141,12 @@ export function registerAdmin(app: FastifyInstance, pool: Pool, issuer: URL, web
     if (!viewer) return reply;
     if (!fields(request)) return failure(reply, 400, 'unexpected_body');
     if (request.params.id === viewer.id) return failure(reply, 400, 'own_account');
-    const outcome = await transaction(pool, async (db) => {
-      const account = (await db.query<{ id: string; instance_role: string | null }>(
-        'SELECT id, instance_role FROM accounts WHERE id = $1 AND deleted_at IS NULL FOR UPDATE', [request.params.id])).rows[0];
-      if (!account) return undefined;
-      if (account.instance_role) return { blocked: ['instance administrator'] };
-      const blocked = await leaveAllTeams(db, account.id);
-      if (blocked.length) return { blocked };
-      await db.query(`UPDATE accounts SET enabled = false, security_epoch = security_epoch + 1, deleted_at = now(),
-        email = 'deleted-' || id || '@deleted.invalid', display_name = NULL, password_hash = 'deleted',
-        totp_secret = NULL, totp_confirmed_at = NULL, email_verified_at = NULL WHERE id = $1`, [account.id]);
-      for (const table of ['oidc_records', 'web_sessions', 'agent_tokens', 'account_links']) {
-        await db.query(`DELETE FROM ${table} WHERE account_id = $1`, [account.id]);
-      }
-      await db.query('DELETE FROM invitations WHERE invited_by = $1 AND accepted_at IS NULL', [account.id]);
-      await audit(db, 'account.deleted', account.id, viewer.id);
-      return { blocked: [] as string[] };
-    });
-    if (!outcome) return failure(reply, 404, 'account_not_found');
-    if (outcome.blocked.length) return reply.code(409).send({ error: 'sole_team_owner', teams: outcome.blocked });
+    const outcome = await transaction(pool, (db) => deleteAccount(db, request.params.id, viewer.id));
+    if (outcome === undefined) return failure(reply, 404, 'account_not_found');
+    if (outcome) {
+      return reply.code(409).send({ error: 'sole_team_owner',
+        teams: outcome.reason === 'instance_administrator' ? ['instance administrator'] : outcome.teams });
+    }
     notifier.account(request.params.id);
     return { deleted: true };
   });
@@ -176,9 +164,10 @@ export function registerAdmin(app: FastifyInstance, pool: Pool, issuer: URL, web
   app.get('/admin/api/applications', async (request, reply) => {
     if (!await reader(request, reply)) return reply;
     const applications = (await pool.query(
-      `SELECT id, name, home_url AS "homeUrl", callback, post_logout AS "postLogout", backchannel_logout AS notifications,
-              sign_in_name AS "signInName", sign_in_logo_url AS "signInLogoUrl",
-              enabled, created_at AS "createdAt" FROM applications ORDER BY created_at, id`)).rows;
+      `SELECT p.id, p.name, p.home_url AS "homeUrl", p.callback, p.post_logout AS "postLogout", p.backchannel_logout AS notifications,
+              p.sign_in_name AS "signInName", p.sign_in_logo_url AS "signInLogoUrl",
+              p.enabled, p.created_at AS "createdAt", o.name AS team
+       FROM applications p LEFT JOIN orgs o ON o.id = p.org_id ORDER BY p.org_id IS NOT NULL, p.created_at, p.id`)).rows;
     return { applications };
   });
 
@@ -218,6 +207,24 @@ export function registerAdmin(app: FastifyInstance, pool: Pool, issuer: URL, web
     const [value] = fields(request, 'status') ?? [];
     if (value !== 'enabled' && value !== 'disabled') return failure(reply, 400, 'invalid_status');
     return setApplicationEnabled(pool, request.params.id, value === 'enabled', viewer.id);
+  });
+
+  // Whether teams may register their own applications, how many each, and where those may live.
+  app.post('/admin/api/team-applications', guard, async (request, reply) => {
+    const viewer = await writer(request, reply);
+    if (!viewer) return reply;
+    const [enabled, count, privateNetwork] = fields(request, 'enabled', 'limit', 'privateNetwork') ?? [];
+    const limit = Number(count);
+    if (!['true', 'false'].includes(enabled ?? '') || !['true', 'false'].includes(privateNetwork ?? '') ||
+      !Number.isInteger(limit) || limit < 1 || limit > 1_000) return failure(reply, 400, 'invalid_request');
+    const policy = { enabled: enabled === 'true', limit, privateNetwork: privateNetwork === 'true' };
+    await transaction(pool, async (db) => {
+      await lockInstanceAdministration(db);
+      await setSetting(db, 'team_applications', policy);
+      await audit(db, 'instance.team_applications_changed', 'instance', viewer.id,
+        `${policy.enabled ? 'enabled' : 'disabled'}, limit ${limit}${policy.privateNetwork ? ', private network' : ''}`);
+    });
+    return { teamApplications: policy };
   });
 
   const mailTarget = (viewer: Viewer) => viewer.email;

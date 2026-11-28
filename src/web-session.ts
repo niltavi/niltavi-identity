@@ -19,6 +19,8 @@ export type Viewer = {
   secondFactorEnabled: boolean;
   secondFactorVerified: boolean;
   deletionRequested: boolean;
+  deletionRequestedAt: Date | null;
+  hasPassword: boolean;
   signedInAt: Date;
   expiresAt: Date;
   activeSessions: number;
@@ -56,7 +58,8 @@ export function createWebSessions(pool: Pool, issuer: URL, realm?: string) {
               a.display_name AS name, a.locale, a.instance_role AS "instanceRole",
               a.totp_confirmed_at IS NOT NULL AS "secondFactorEnabled",
               (a.totp_confirmed_at IS NOT NULL AND s.second_factor_at IS NOT NULL) AS "secondFactorVerified",
-              a.deletion_requested_at IS NOT NULL AS "deletionRequested",
+              a.deletion_requested_at IS NOT NULL AS "deletionRequested", a.deletion_requested_at AS "deletionRequestedAt",
+              a.password_hash IS NOT NULL AS "hasPassword",
               s.created_at AS "signedInAt", s.expires_at AS "expiresAt",
               (SELECT count(*)::int FROM web_sessions active WHERE active.account_id = a.id
                 AND active.expires_at > now() AND active.account_epoch = a.security_epoch) AS "activeSessions"

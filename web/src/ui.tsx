@@ -113,17 +113,40 @@ export function Loaded<T>({ source, children }: { source: { data: T | undefined;
   </div>;
 }
 
-export function Panel({ title, description, children, aside }: { title: string; description?: ReactNode; children: ReactNode; aside?: ReactNode }) {
+// A page that holds one thing leaves `title` out: the page heading already names it.
+export function Panel({ title, description, children, aside }: { title?: string; description?: ReactNode; children: ReactNode; aside?: ReactNode }) {
   return <Card className="min-w-0">
-    <Card.Header className="flex flex-wrap items-start justify-between gap-3">
+    {(title || description || aside) && <Card.Header className="flex flex-wrap items-start justify-between gap-3">
       <div className="grid min-w-0 gap-1">
-        <Card.Title className="text-base font-semibold" render={props => <h2 {...props} />}>{title}</Card.Title>
+        {title && <Card.Title className="text-base font-semibold" render={props => <h2 {...props} />}>{title}</Card.Title>}
         {description && <Card.Description>{description}</Card.Description>}
       </div>
       {aside}
-    </Card.Header>
+    </Card.Header>}
     <Card.Content className="grid min-w-0 gap-4">{children}</Card.Content>
   </Card>;
+}
+
+// A part of a long page. Parts are set apart by space and a rule, and an address can point at one by its id.
+export function Section({ id, title, description, children }: { id: string; title: string; description?: ReactNode; children: ReactNode }) {
+  return <section id={id} aria-labelledby={`${id}-title`} className="page-section grid min-w-0 gap-5">
+    <div className="grid gap-1">
+      <h2 id={`${id}-title`} className="text-xl font-semibold tracking-tight">{title}</h2>
+      {description && <p className="text-sm text-muted">{description}</p>}
+    </div>
+    {children}
+  </section>;
+}
+
+// One setting inside a section: what it is on the left, the control beside or below it.
+export function Setting({ title, description, children }: { title: string; description?: ReactNode; children: ReactNode }) {
+  return <div className="grid min-w-0 gap-3 md:grid-cols-[minmax(0,14rem)_minmax(0,1fr)] md:gap-6">
+    <div className="grid content-start gap-1">
+      <h3 className="font-medium">{title}</h3>
+      {description && <p className="text-sm text-muted">{description}</p>}
+    </div>
+    <div className="grid min-w-0 content-start gap-3">{children}</div>
+  </div>;
 }
 
 export function Empty({ children }: { children: ReactNode }) {
@@ -195,7 +218,8 @@ export function CodeField({ label, error, onInput, onComplete, action }:
       <Label htmlFor={id}>{label}</Label>
       {action}
     </div>
-    <InputOTP maxLength={6} value={value} isInvalid={Boolean(error)} onChange={v => { setValue(v); onInput(); if (v.length === 6) onComplete?.(v); }}
+    {/* The name is what a surrounding form submits: without it the code never leaves the page. */}
+    <InputOTP name="code" maxLength={6} value={value} isInvalid={Boolean(error)} onChange={v => { setValue(v); onInput(); if (v.length === 6) onComplete?.(v); }}
       id={id} aria-invalid={Boolean(error)} aria-describedby={error ? errorId : undefined}>
       <InputOTP.Group><InputOTP.Slot index={0} /><InputOTP.Slot index={1} /><InputOTP.Slot index={2} /></InputOTP.Group>
       <InputOTP.Separator />

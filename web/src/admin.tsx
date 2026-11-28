@@ -1,4 +1,4 @@
-import { Button, Dropdown, Form, Input, Label, Table, TextField } from '@heroui/react';
+import { Button, Chip, Dropdown, Form, Input, Label, Table, TextField } from '@heroui/react';
 import Envelope from '@gravity-ui/icons/Envelope';
 import House from '@gravity-ui/icons/House';
 import LayoutCellsLarge from '@gravity-ui/icons/LayoutCellsLarge';
@@ -7,25 +7,28 @@ import Person from '@gravity-ui/icons/Person';
 import Persons from '@gravity-ui/icons/Persons';
 import { useState } from 'react';
 import { RequestFailure, call, codeOf, problem } from './api';
-import type { MailStatus, RegistrationPolicy } from './api';
-import { container } from './site';
+import type { MailStatus, RegistrationPolicy, TeamApplicationPolicy } from './api';
+import { adminPages, areas, pageOf } from './pages';
+import { ApplicationManager, AuditTable, UnlockChanges } from './shared';
+import { container, pathFor } from './site';
 import type { Route } from './site';
 import { MailSetup } from './setup';
 import { SidebarLayout } from './sidebar-layout';
-import { Choice, CodeField, ConfirmButton, Empty, Loaded, Notice, PageLink, Panel, Secret, State, TaskFeedback, readForm, useApp, useLoad, useTask, useTime } from './ui';
+import { Choice, ConfirmButton, Empty, Loaded, Notice, PageLink, Panel, Secret, State, TaskFeedback, readForm, useApp, useLoad, useTask, useTime } from './ui';
 
 type Overview = {
   counts: { accounts: number; teams: number; applications: number; deletionRequests: number };
-  mail: MailStatus; registration: RegistrationPolicy; canWrite: boolean; secondFactorEnabled: boolean; role: 'owner' | 'admin';
+  mail: MailStatus; registration: RegistrationPolicy; teamApplications: TeamApplicationPolicy;
+  canWrite: boolean; secondFactorEnabled: boolean; role: 'owner' | 'admin';
 };
 type Console = { overview: Overview; reload: () => Promise<void> };
 
+const icons = { overview: House, accounts: Person, teams: Persons, applications: LayoutCellsLarge, mail: Envelope, audit: ListUl };
+
 export function Admin({ route }: { route: Route }) {
-  const { t, language, account, refresh } = useApp();
-  const unlock = useTask();
-  const [codeError, setCodeError] = useState<string>();
-  const overview = useLoad(() => call<Overview>('/admin/api/overview'), 'admin:' + (account?.instanceRole ?? ''));
-  const title = t('Instance console', '实例管理台');
+  const { t, language, account } = useApp();
+  const overview = useLoad(() => call<Overview>('/admin/api/overview'), 'admin:' + (account?.instanceRole ?? '') + ':' + String(account?.secondFactorVerified));
+  const title = t(...areas.admin);
   if (!account) return null;
   if (!account.instanceRole) {
     return <main className={`${container} flex-1 py-8 md:py-12`}><div className="grid max-w-xl gap-4">
@@ -34,50 +37,29 @@ export function Admin({ route }: { route: Route }) {
       <PageLink to={{ section: 'workspace' }}>{t('Back to your account', '返回账号中心')}</PageLink>
     </div></main>;
   }
-  const pages = [
-    { id: undefined, label: t('Overview', '概览'), icon: House },
-    { id: 'accounts', label: t('Accounts', '账号'), icon: Person },
-    { id: 'teams', label: t('Teams', '团队'), icon: Persons },
-    { id: 'applications', label: t('Applications', '应用'), icon: LayoutCellsLarge },
-    { id: 'mail', label: t('Outgoing mail', '发信'), icon: Envelope },
-    { id: 'audit', label: t('Audit log', '审计日志'), icon: ListUl },
-  ];
-  const tab = pages.find(({ id }) => id === route.tab)?.id;
+  const page = pageOf(route)!;
+  const tab = page.id;
+  const href = (id: string | undefined) => pathFor({ language, section: 'admin', tab: id });
+  const groups = [{ id: 'console', items: adminPages.map(entry => ({
+    id: entry.id ?? 'overview', label: t(entry.en, entry.zh), icon: icons[entry.id ?? 'overview'], href: href(entry.id) })) }];
   const state = overview.data;
   const console: Console | undefined = state && { overview: state, reload: overview.reload };
   const banner = state && (state.mail.source === 'none' || !state.canWrite) && <div className="grid gap-3">
     {state.mail.source === 'none' && <Notice status="warning" action={tab !== 'mail' && <PageLink to={{ section: 'admin', tab: 'mail' }}>{t('Set up outgoing mail', '配置发信')}</PageLink>}>
       {t('Outgoing mail is not configured. New accounts stay unverified and people cannot reset their own passwords.', '未配置发信。新账号的邮箱保持未验证，用户也无法自行重置密码。')}
     </Notice>}
-    {!state.canWrite && unlock.error && <Notice status="danger">{unlock.error}</Notice>}
-    {!state.canWrite && (state.secondFactorEnabled ? <Notice status="accent" action={
-      <Form className="flex w-full max-w-sm flex-wrap items-end gap-2" validationBehavior="native" onSubmit={event => {
-        const code = readForm(event)('code').trim();
-        setCodeError(undefined);
-        void unlock.run('unlock', async () => {
-          try { await call('/account/second-factor/verify', { code }); }
-          catch (failure) {
-            if (codeOf(failure) !== 'invalid_code') throw failure;
-            return setCodeError(problem(failure, language));
-          }
-          await refresh();
-          await overview.reload();
-        });
-      }}>
-        <div className="min-w-0 flex-1 basis-40"><CodeField label={t('Verification code', '验证码')} error={codeError} onInput={() => setCodeError(undefined)} /></div>
-        <Button type="submit" size="md" isPending={unlock.pending === 'unlock'}>{t('Unlock changes', '解锁更改')}</Button>
-      </Form>}>
-      {t('You can look around. To make changes, enter a code from your authenticator app.', '当前只能查看。要进行更改，请输入验证器中的验证码。')}
-    </Notice> : <Notice status="accent" action={<PageLink to={{ section: 'workspace', tab: 'security' }}>{t('Turn on two-step verification', '开启两步验证')}</PageLink>}>
-      {t('You can look around. Making changes needs two-step verification on your account.', '当前只能查看。进行更改需要先为你的账号开启两步验证。')}
-    </Notice>)}
+    {!state.canWrite && <UnlockChanges onUnlocked={overview.reload} />}
   </div>;
   return <SidebarLayout title={title} navigation={t('Instance console navigation', '实例管理台导航')}
-    openNavigation={t('Open instance console navigation', '打开实例管理台导航')} route={route} pages={pages} activeTab={tab} account={account}>
-    <h1 className="text-balance text-3xl font-semibold tracking-tight">{title}</h1>
+    openNavigation={t('Open instance console navigation', '打开实例管理台导航')} route={route} groups={groups} activeHref={href(tab)} account={account}>
+    <div className="grid justify-items-start gap-2">
+      <Chip size="sm" variant="soft" color="accent" className="sm:hidden"><Chip.Label>{title}</Chip.Label></Chip>
+      <h1 className="text-balance text-3xl font-semibold tracking-tight">{t(page.en, page.zh)}</h1>
+    </div>
     {banner}
     <Loaded source={overview}>{() => console ? (!tab ? <Summary console={console} /> : tab === 'accounts' ? <Accounts console={console} />
-      : tab === 'teams' ? <AllTeams /> : tab === 'applications' ? <Applications console={console} /> : tab === 'mail' ? <Mail console={console} /> : <Audit />) : null}</Loaded>
+      : tab === 'teams' ? <AllTeams /> : tab === 'applications' ? <Applications console={console} /> : tab === 'mail' ? <Mail console={console} />
+      : <AuditTable source="/admin/api/audit" />) : null}</Loaded>
   </SidebarLayout>;
 }
 
@@ -219,7 +201,7 @@ function Accounts({ console: { overview, reload } }: { console: Console }) {
     </li>;
   }
 
-  return <Panel title={t('Accounts', '账号')}>
+  return <Panel>
     <Form className="flex max-w-md flex-wrap items-end gap-3" validationBehavior="native" role="search" onSubmit={event => setQuery(readForm(event)('q').trim())}>
       <TextField name="q" type="search" className="min-w-0 flex-1 basis-48">
         <Label>{t('Search by email or name', '按邮箱或名称搜索')}</Label><Input className="w-full min-w-0" />
@@ -280,7 +262,7 @@ function AllTeams() {
   const { t } = useApp();
   const time = useTime();
   const list = useLoad(() => call<{ teams: Array<{ id: string; name: string; createdAt: string; members: number; owners: string }> }>('/admin/api/teams'), 'admin-teams');
-  return <Panel title={t('Teams', '团队')} description={t('Each team is managed by its own owners.', '团队由各自的所有者管理。')}>
+  return <Panel description={t('Each team is managed by its own owners.', '团队由各自的所有者管理。')}>
     <Loaded source={list}>{({ teams }) => teams.length ? <Table>
       <Table.ScrollContainer>
         <Table.Content aria-label={t('Teams', '团队')} className="min-w-[36rem]">
@@ -304,100 +286,37 @@ function AllTeams() {
   </Panel>;
 }
 
-type Application = {
-  id: string; name: string; homeUrl: string; enabled: boolean; createdAt: string;
-  signInName: string | null; signInLogoUrl: string | null;
-};
-type Credentials = { client_id: string; client_secret: string };
-
 function Applications({ console: { overview, reload } }: { console: Console }) {
   const { t } = useApp();
   const task = useTask();
-  const registering = useTask();
-  const brandingTask = useTask();
-  const [branding, setBranding] = useState<string>();
-  const [issued, setIssued] = useState<Credentials & { fresh: boolean }>();
-  const list = useLoad(() => call<{ applications: Application[] }>('/admin/api/applications'), 'applications');
-  const path = (id: string, action: string) => `/admin/api/applications/${encodeURIComponent(id)}/${action}`;
-  const credentials = issued && <Secret title={issued.fresh ? t('Application registered', '应用已注册') : t('New secret created', '已生成新密钥')}
-    note={t('Copy the secret into the application now. It is shown only this once.', '请立即把密钥填入应用配置。密钥只在此处显示一次。')} onDone={() => setIssued(undefined)}
-    values={[{ label: 'Client ID', value: issued.client_id, name: 'client-id' }, { label: 'Client secret', value: issued.client_secret, name: 'client-secret' }]} />;
-  return <>
-    <Panel title={t('Applications', '应用')}>
+  const policy = overview.teamApplications;
+  const [enabled, setEnabled] = useState(String(policy.enabled));
+  const [network, setNetwork] = useState(String(policy.privateNetwork));
+  return <ApplicationManager base="/admin/api/applications" canWrite={overview.canWrite} showOwner onChanged={reload}>
+    <Panel title={t('Applications added by teams', '团队自行添加的应用')}
+      description={t('A team’s own application is open to that team’s members only.', '团队自己添加的应用只对该团队成员开放。')}>
       <TaskFeedback task={task} />
-      {issued && !issued.fresh && credentials}
-      <Loaded source={list}>{({ applications }) => applications.length ? <ul className="grid divide-y divide-separator">
-        {applications.map(entry => <li key={entry.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0" data-application={entry.id}>
-          <div className="grid min-w-0 gap-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium wrap-anywhere">{entry.name}</span>
-              <State color={entry.enabled ? 'success' : 'danger'}>{entry.enabled ? t('Enabled', '已启用') : t('Disabled', '已停用')}</State>
-            </div>
-            <p className="text-sm text-muted wrap-anywhere">{entry.id} · {entry.homeUrl}</p>
-          </div>
-          {overview.canWrite && <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" variant="secondary" aria-expanded={branding === entry.id}
-              onPress={() => { brandingTask.setError(undefined); setBranding(branding === entry.id ? undefined : entry.id); }}>
-              {t('Sign-in branding', '登录页品牌')}
-            </Button>
-            <Button size="sm" variant="secondary" isPending={task.pending === entry.id + ':status'} onPress={() => void task.run(entry.id + ':status', async () => {
-              await call(path(entry.id, 'status'), { status: entry.enabled ? 'disabled' : 'enabled' });
-              await list.reload();
-            })}>{entry.enabled ? t('Disable', '停用') : t('Enable', '启用')}</Button>
-            <ConfirmButton label={t('New secret', '更换密钥')} confirm={t('Replace the current secret', '确认更换，旧密钥立即失效')} pending={task.pending === entry.id + ':rotate'}
-              onConfirm={() => void task.run(entry.id + ':rotate', async () => {
-                setIssued({ ...await call<Credentials>(path(entry.id, 'rotate'), {}), fresh: false });
-              })} />
-          </div>}
-          {overview.canWrite && branding === entry.id && <Form className="grid w-full gap-3" validationBehavior="native" onSubmit={event => {
-            const field = readForm(event);
-            void brandingTask.run('save', async () => {
-              await call(path(entry.id, 'branding'), { signInName: field('signInName'), signInLogoUrl: field('signInLogoUrl') });
-              await list.reload();
-              setBranding(current => current === entry.id ? undefined : current);
-            });
-          }}>
-            <TaskFeedback task={brandingTask} />
-            <div className="grid gap-3 sm:grid-cols-2">
-              <TextField name="signInName" defaultValue={entry.signInName ?? ''}>
-                <Label>{t('Name on sign-in page', '登录页显示名称')}</Label>
-                <Input className="w-full min-w-0" maxLength={80} autoComplete="off" />
-              </TextField>
-              <TextField name="signInLogoUrl" type="url" defaultValue={entry.signInLogoUrl ?? ''}>
-                <Label>{t('Logo URL (HTTPS)', 'Logo 地址（HTTPS）')}</Label>
-                <Input className="w-full min-w-0" autoComplete="off" />
-              </TextField>
-            </div>
-            <p className="text-sm text-muted">{t('Leave both fields empty to hide the application brand on the sign-in page.', '两项都留空时，登录页不显示应用品牌。')}</p>
-            <div><Button type="submit" size="sm" isPending={brandingTask.pending === 'save'}>{t('Save', '保存')}</Button></div>
-          </Form>}
-        </li>)}
-      </ul> : <Empty>{t('No applications are registered yet.', '还没有注册应用。')}</Empty>}</Loaded>
-    </Panel>
-    {overview.canWrite && <Panel title={t('Register an application', '注册应用')}
-      description={t('Identity sends people back to /auth/callback on the application address.', 'Identity 会把用户带回应用地址下的 /auth/callback。')}>
-      <TaskFeedback task={registering} />
       <Form className="grid gap-4" validationBehavior="native" onSubmit={event => {
-        const field = readForm(event);
-        const form = event.currentTarget;
-        void registering.run('register', async () => {
-          const created = await call<Credentials>('/admin/api/applications', { id: field('id').trim(), name: field('name').trim(), homeUrl: field('homeUrl').trim() });
-          setIssued({ ...created, fresh: true });
-          form.reset();
-          await Promise.all([list.reload(), reload()]);
+        const limit = readForm(event)('limit').trim();
+        void task.run('save', async () => {
+          await call('/admin/api/team-applications', { enabled, limit, privateNetwork: network });
+          await reload();
+          return t('Setting saved.', '设置已保存。');
         });
       }}>
         <div className="grid gap-4 sm:grid-cols-3">
-          <TextField name="id" isRequired><Label>{t('Application ID', '应用 ID')}</Label>
-            <Input className="w-full min-w-0" pattern="[a-z0-9][a-z0-9-]{2,63}" autoCapitalize="none" spellCheck="false" autoComplete="off" /></TextField>
-          <TextField name="name" isRequired><Label>{t('Name', '名称')}</Label><Input className="w-full min-w-0" maxLength={80} autoComplete="off" /></TextField>
-          <TextField name="homeUrl" type="url" isRequired><Label>{t('Address (https://…)', '地址（https://…）')}</Label><Input className="w-full min-w-0" autoComplete="off" /></TextField>
+          <Choice label={t('Teams may add applications', '允许团队添加应用')} value={enabled} onChange={setEnabled} isDisabled={!overview.canWrite}
+            options={[{ id: 'true', label: t('Allowed', '允许') }, { id: 'false', label: t('Not allowed', '不允许') }]} />
+          <TextField name="limit" type="number" isRequired defaultValue={String(policy.limit)} isDisabled={!overview.canWrite}>
+            <Label>{t('Applications per team', '每个团队的应用上限')}</Label><Input className="w-full min-w-0" min={1} max={1000} inputMode="numeric" />
+          </TextField>
+          <Choice label={t('Application addresses', '应用地址')} value={network} onChange={setNetwork} isDisabled={!overview.canWrite}
+            options={[{ id: 'false', label: t('Public internet only', '仅限公网地址') }, { id: 'true', label: t('Private network allowed', '允许内网地址') }]} />
         </div>
-        <div><Button type="submit" isPending={registering.pending === 'register'}>{t('Register application', '注册应用')}</Button></div>
+        {overview.canWrite && <div><Button type="submit" variant="secondary" isPending={task.pending === 'save'}>{t('Save', '保存')}</Button></div>}
       </Form>
-      {issued?.fresh && credentials}
-    </Panel>}
-  </>;
+    </Panel>
+  </ApplicationManager>;
 }
 
 function Mail({ console: { overview, reload } }: { console: Console }) {
@@ -407,7 +326,7 @@ function Mail({ console: { overview, reload } }: { console: Console }) {
   const [editing, setEditing] = useState(false);
   const managed = mail.source === 'environment' || mail.source === 'tencent-ses';
   return <>
-    <Panel title={t('Outgoing mail', '发信')} aside={<State color={mail.source === 'none' ? 'warning' : 'success'}>{mail.source === 'none' ? t('Not configured', '未配置') : t('Working', '已配置')}</State>}>
+    <Panel title={t('Mail server', '发信服务器')} aside={<State color={mail.source === 'none' ? 'warning' : 'success'}>{mail.source === 'none' ? t('Not configured', '未配置') : t('Working', '已配置')}</State>}>
       <TaskFeedback task={task} />
       {mail.source === 'none' && <Empty>{t('Identity cannot send mail yet. Add a mail server below.', 'Identity 目前无法发信。请在下方添加发信服务器。')}</Empty>}
       {managed && <Empty>{t('Mail is set in this deployment’s configuration and cannot be changed here.', '发信由部署配置指定，无法在此修改。')}</Empty>}
@@ -434,57 +353,4 @@ function Mail({ console: { overview, reload } }: { console: Console }) {
         onConfirmed={async () => { setEditing(false); await reload(); }} />
     </Panel>}
   </>;
-}
-
-const actions: Record<string, [string, string]> = {
-  'account.created': ['Account created', '创建账号'], 'account.registered': ['Account registered', '注册账号'],
-  'account.email_registered': ['Account registered with verified email', '注册账号并验证邮箱'], 'account.testenv_registered': ['Account registered', '注册账号'],
-  'account.deleted': ['Account deleted', '删除账号'], 'account.deletion_requested': ['Deletion requested', '申请删除账号'],
-  'account.deletion_withdrawn': ['Deletion request withdrawn', '撤回删除申请'], 'account.email_verified': ['Email verified', '验证邮箱'],
-  'account.email_verified_by_operator': ['Email marked as verified', '标记邮箱为已验证'], 'account.password_reset': ['Password reset', '重置密码'],
-  'account.password_set_by_operator': ['Password set by administrator', '管理员设置密码'],
-  'account.recovery_requested': ['Password reset requested', '请求重置密码'], 'account.reset_link_issued': ['Reset link created', '生成重置链接'],
-  'account.second_factor_enabled': ['Two-step verification turned on', '开启两步验证'], 'account.second_factor_removed': ['Two-step verification turned off', '关闭两步验证'],
-  'account.session_revoked': ['Session ended', '结束会话'], 'account.sessions_ended': ['Signed out of all devices', '退出所有设备'],
-  'account.sign_in_failed': ['Sign-in failed', '登录失败'], 'account.signed_in': ['Signed in', '登录'],
-  'account.enabled': ['Account enabled', '启用账号'], 'account.disabled': ['Account disabled', '停用账号'],
-  'agent_token.issued': ['Agent token created', '创建 Agent 令牌'], 'agent_token.revoked': ['Agent token revoked', '撤销 Agent 令牌'],
-  'service_token.issued': ['Service token created', '签发服务令牌'],
-  'application.registered': ['Application registered', '注册应用'], 'application.enabled': ['Application enabled', '启用应用'],
-  'application.disabled': ['Application disabled', '停用应用'], 'application.secret_rotated': ['Application secret replaced', '更换应用密钥'],
-  'instance.admin_granted': ['Administrator added', '添加管理员'], 'instance.admin_revoked': ['Administrator removed', '移除管理员'],
-  'instance.initialized': ['Instance set up', '实例完成初始化'], 'instance.mail_configured': ['Outgoing mail configured', '配置发信'],
-  'instance.mail_removed': ['Outgoing mail removed', '移除发信配置'], 'instance.registration_changed': ['Registration setting changed', '更改注册设置'],
-  'team.created': ['Team created', '创建团队'], 'team.renamed': ['Team renamed', '重命名团队'], 'team.member_invited': ['Member invited', '邀请成员'],
-  'team.invitation_revoked': ['Invitation withdrawn', '撤回邀请'], 'team.member_joined': ['Member joined', '成员加入'], 'team.member_left': ['Member left', '成员离开'],
-  'team.member_removed': ['Member removed', '移除成员'], 'team.member_role_changed': ['Member role changed', '更改成员角色'],
-};
-
-function Audit() {
-  const { t, language } = useApp();
-  const time = useTime();
-  type Event = { id: string; action: string; occurredAt: string; actor: string | null; subject: string | null };
-  const list = useLoad(() => call<{ events: Event[] }>('/admin/api/audit'), 'audit');
-  return <Panel title={t('Audit log', '审计日志')} description={t('The latest 200 events.', '最近 200 条记录。')}>
-    <Loaded source={list}>{({ events }) => events.length ? <Table>
-      <Table.ScrollContainer className="max-h-[32rem]">
-        <Table.Content aria-label={t('Audit log', '审计日志')} className="min-w-[40rem]">
-          <Table.Header>
-            <Table.Column>{t('Time', '时间')}</Table.Column>
-            <Table.Column isRowHeader>{t('Event', '事件')}</Table.Column>
-            <Table.Column>{t('By', '操作者')}</Table.Column>
-            <Table.Column>{t('On', '对象')}</Table.Column>
-          </Table.Header>
-          <Table.Body>
-            {events.map(event => <Table.Row key={event.id} id={String(event.id)}>
-              <Table.Cell className="whitespace-nowrap">{time(event.occurredAt)}</Table.Cell>
-              <Table.Cell>{actions[event.action]?.[language === 'en' ? 0 : 1] ?? event.action}</Table.Cell>
-              <Table.Cell>{event.actor ?? t('System', '系统')}</Table.Cell>
-              <Table.Cell>{event.subject === 'unknown' ? t('Unknown account', '未知账号') : event.subject}</Table.Cell>
-            </Table.Row>)}
-          </Table.Body>
-        </Table.Content>
-      </Table.ScrollContainer>
-    </Table> : <Empty>{t('Nothing has been recorded yet.', '还没有记录。')}</Empty>}</Loaded>
-  </Panel>;
 }

@@ -3,7 +3,8 @@ import type { Language } from './site';
 export type Account = {
   id: string; email: string; emailVerified: boolean; name: string | null; locale: Language | null;
   instanceRole: 'owner' | 'admin' | null; secondFactorEnabled: boolean; secondFactorVerified: boolean;
-  deletionRequested: boolean; signedInAt: string; expiresAt: string; activeSessions: number;
+  deletionRequested: boolean; deletionAt: string | null; hasPassword: boolean;
+  signedInAt: string; expiresAt: string; activeSessions: number;
 };
 export type RegistrationPolicy = 'open' | 'invite' | 'closed';
 
@@ -17,7 +18,18 @@ export type Settings = {
   applications: Array<{ id: string; name: string; url: string }>;
 };
 export type TeamRole = 'owner' | 'admin' | 'member';
-export type Team = { id: string; name: string; role: TeamRole; personal: boolean; members: number };
+export type Team = { id: string; name: string; role: TeamRole; personal: boolean; members: number; requireSecondFactor: boolean };
+// An application the account may enter. "joined" means it has signed in there before, "authorized" that it holds access now.
+export type Launchable = {
+  id: string; name: string; url: string; logoUrl: string | null; owner: { kind: 'instance' } | { kind: 'team'; id: string; name: string };
+  joined: boolean; authorized: boolean; lastSeenAt: string | null;
+};
+export type RegisteredApplication = {
+  id: string; name: string; homeUrl: string; enabled: boolean; createdAt: string;
+  signInName: string | null; signInLogoUrl: string | null; team?: string | null;
+};
+export type AuditEvent = { id: string; action: string; occurredAt: string; actor: string | null; subject: string | null; detail?: string | null };
+export type TeamApplicationPolicy = { enabled: boolean; limit: number; privateNetwork: boolean };
 export type AgentToken = {
   id: string; name: string; hint: string; appName: string; orgName: string; personal: boolean;
   createdAt: string; expiresAt: string | null; lastUsedAt: string | null;
@@ -68,6 +80,14 @@ const problems: Record<string, [string, string]> = {
   common_password: ['This password is too easy to guess. Choose a different one.', '这个密码太容易被猜到，请换一个。'],
   invalid_credentials: ['The email or password is incorrect.', '邮箱或密码不正确。'],
   incorrect_password: ['Your current password is incorrect.', '当前密码不正确。'],
+  recent_sign_in_required: ['Sign out and sign in again, then repeat this within ten minutes.', '请退出后重新登录，并在十分钟内再次操作。'],
+  invalid_request: ['Something went wrong. Reload the page and try again.', '出了点问题，请刷新页面后重试。'],
+  instance_administrator: ['An instance administrator cannot be deleted. Hand the role over first.', '实例管理员不能删除，请先移交管理员身份。'],
+  name_mismatch: ['The name does not match this team.', '输入的名称与团队名称不一致。'],
+  application_not_found: ['This application does not exist.', '应用不存在。'],
+  application_limit: ['This team has reached its application limit.', '此团队的应用数量已达上限。'],
+  team_applications_disabled: ['This instance does not let teams add applications.', '此实例未开放团队自行添加应用。'],
+  private_address: ['Use an address on the public internet.', '请使用公网可访问的地址。'],
   invalid_code: ['The code is incorrect or has expired.', '验证码不正确或已过期。'],
   registration_unavailable: ['Registration is not open on this instance.', '此实例未开放注册。'],
   registration_domain: ['Use an address at the domain shown on this page.', '请使用页面上所示域名的邮箱。'],
@@ -84,8 +104,8 @@ const problems: Record<string, [string, string]> = {
   invalid_token_request: ['Check the name, application, team, and validity.', '请检查名称、应用、团队和有效期。'],
   token_not_found: ['This token has already been revoked.', '此令牌已撤销。'],
   second_factor_enabled: ['Two-step verification is already on.', '两步验证已开启。'],
-  second_factor_required: ['Enter a code from your authenticator app to make changes.', '请输入验证器中的验证码后再进行更改。'],
-  second_factor_not_enabled: ['Turn on two-step verification to make changes.', '请先开启两步验证再进行更改。'],
+  second_factor_required: ['Enter a code from your authenticator app to continue.', '请输入验证器中的验证码后继续。'],
+  second_factor_not_enabled: ['Turn on two-step verification to continue.', '请先开启两步验证再继续。'],
   invalid_state: ['Something went wrong. Reload the page and try again.', '出了点问题，请刷新页面后重试。'],
   invalid_status: ['Something went wrong. Reload the page and try again.', '出了点问题，请刷新页面后重试。'],
   invalid_policy: ['Something went wrong. Reload the page and try again.', '出了点问题，请刷新页面后重试。'],

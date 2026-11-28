@@ -14,9 +14,11 @@
 
 Identity is an OpenID Connect provider for your applications. Use it for primary sign-in or offer it alongside an existing login. Once users sign in, they can open other connected apps and manage their sessions from one account center.
 
-Users can sign in with a password or, when outgoing mail is configured, an email code. They can also issue revocable access tokens for an MCP client or command-line tool, scoped to one application and one team.
+Users can sign in with a password or, when outgoing mail is configured, an email code. Their first screen shows the applications they can open. They can also issue revocable access tokens for an MCP client or command-line tool, scoped to one application and one team.
 
-Run Identity on your own machine with Docker Compose. The admin console lets you manage accounts, register applications, and set the registration policy for your instance.
+A team runs itself. Its owners and admins manage members and roles, connect the team's own applications, issue tokens that act as the team, and read the team's audit log, without asking whoever operates the instance.
+
+Run Identity on your own machine with Docker Compose. The instance console lets you manage accounts, register applications for everyone, set the registration policy, and decide whether teams may add applications of their own.
 
 <br />
 

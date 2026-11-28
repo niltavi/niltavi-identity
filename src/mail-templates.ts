@@ -129,6 +129,12 @@ export const messages = {
     actions: [{ label: 'View invitation', url }],
     note: 'The invitation expires in 7 days and can be accepted once.',
   }),
+  emailChanged: (address: string) => render({
+    subject: 'Your Niltavi Identity email address changed',
+    title: 'Your email address changed',
+    introduction: `Your Niltavi Identity account now signs in with ${address}. This address no longer receives its messages.`,
+    note: `If you didn't make this change, contact ${mailSupport} right away.`,
+  }),
   test: (code: string) => render({
     subject: 'Niltavi Identity outgoing mail test',
     title: 'Confirm your mail settings',

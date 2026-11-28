@@ -46,6 +46,10 @@ export interface Principal {
   // The team this request acts in. An Agent token is bound to exactly one team.
   team: Team | null;
   tokenId: string | null;
+  // Whose token it is: a "member" token acts as the person who created it, a "team" token as the
+  // team itself. A team token has no person behind it: its sub is "team:<team id>", its name is
+  // the token's name and its email is empty. Null for a browser session.
+  agent: 'member' | 'team' | null;
 }
 
 export type Resolution =
@@ -233,10 +237,10 @@ export async function createIdentity(options: IdentityOptions = {}): Promise<Ide
   const mark = (key: string) => store.set(key, { at: Date.now() }, sessionSeconds);
 
   function principal(kind: Principal['kind'], sub: string, account: Account, teams: Team[], teamId: string | null,
-    tokenId: string | null = null): Principal {
+    tokenId: string | null = null, agent: Principal['agent'] = kind === 'agent' ? 'member' : null): Principal {
     // Fields are copied one by one: a session record also holds values that must never leave the server.
     return { kind, issuer, sub, email: account.email, emailVerified: account.emailVerified, name: account.name, locale: account.locale,
-      teams, team: teams.find((team) => team.id === teamId) ?? null, tokenId };
+      teams, team: teams.find((team) => team.id === teamId) ?? null, tokenId, agent };
   }
   const save = (key: string, record: SessionRecord) =>
     store.set(key, record, Math.max(1, Math.ceil((record.expiresAt - Date.now()) / 1_000)));
@@ -315,11 +319,20 @@ export async function createIdentity(options: IdentityOptions = {}): Promise<Ide
       return known && Date.now() - known.checkedAt <= graceMs ? { status: 'authenticated', principal: known.principal } : { status: 'unavailable' };
     }
     agents.delete(key);
-    const account = answer.account as Record<string, unknown> | undefined;
+    const account = answer.account as Record<string, unknown> | null | undefined;
     const [team] = teamsFrom([answer.org]);
-    const sub = text(account?.sub);
-    if (answer.active !== true || !account || !sub || !team) return { status: 'anonymous' };
-    const found = principal('agent', sub, accountFrom(account), [team], team.id, text(answer.token_id) ?? null);
+    if (answer.active !== true || !team) return { status: 'anonymous' };
+    const tokenId = text(answer.token_id) ?? null;
+    let found: Principal;
+    if (answer.kind === 'team') {
+      // A team's own token: nobody's account stands behind it.
+      found = principal('agent', `team:${team.id}`, { email: '', emailVerified: false, name: text(answer.token_name) ?? team.name, locale: null },
+        [team], team.id, tokenId, 'team');
+    } else {
+      const sub = text(account?.sub);
+      if (!account || !sub) return { status: 'anonymous' };
+      found = principal('agent', sub, accountFrom(account), [team], team.id, tokenId);
+    }
     if (agents.size >= 10_000) agents.delete(agents.keys().next().value!);
     agents.set(key, { principal: found, checkedAt: Date.now() });
     return { status: 'authenticated', principal: found };

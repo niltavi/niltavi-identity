@@ -14,6 +14,14 @@ An application identifies an account by the pair `(issuer, sub)`. The email addr
 
 An address is verified by a code or a link mailed to it, or by an instance administrator. An unverified account can sign in and use its personal space. It cannot accept a team invitation and cannot recover its password by mail.
 
+A signed-in person manages the account on one page of the account center, `/workspace/account`:
+
+- **Password.** Changing it takes the current password, signs every other device out and keeps the current browser signed in. An account without a password gets a link by mail to set one.
+- **Email address.** Changing it takes the current password and a code mailed to the new address. The account keeps its address until the code comes back, and the old address is told about the change. This needs outgoing mail.
+- **Deletion.** The account asks for it with its password. Identity deletes the account 7 days later, and the account can cancel at any point before then. An instance administrator, and the only owner of a team that has other members, has to hand that role over first. An instance administrator can still delete an account at once in the console.
+
+An account without a password proves itself for these changes by having signed in within the last ten minutes.
+
 ## Signing in through an application
 
 Identity is an OpenID Connect provider. Discover it at `/.well-known/openid-configuration` on the issuer.
@@ -25,7 +33,7 @@ Upstream sign-in with Google or GitHub is a separate integration, in which Ident
 - Authorization code with S256 PKCE is the only flow. The redirect address must equal the registered one exactly.
 - Registered applications authenticate with `client_secret_basic`.
 - Scopes: `openid`, `email` (`email`, `email_verified`), `profile` (`name`, `locale`), `orgs`. The claims are in the ID token and in UserInfo.
-- `orgs` lists the account's teams as `{ org_id, name, role, personal }`. `role` is `owner`, `admin` or `member`. The personal space is the entry with `personal: true`.
+- `orgs` lists the account's teams as `{ org_id, name, role, personal }`. `role` is `owner`, `admin` or `member`. The personal space is the entry with `personal: true`. A team's own application receives that team only.
 - `ui_locales` chooses the language of the sign-in page (`en` or `zh-CN`). Without it the page follows the browser.
 - `prompt=create` opens registration directly.
 
@@ -35,11 +43,43 @@ Which page the user came from is the application's own business. Keep it on the 
 
 ## Teams
 
-Team roles are owner, admin and member. Owners and admins invite and remove members. Owners change roles. A team always keeps at least one owner: the last owner cannot be removed, demoted or leave.
+Team roles are owner, admin and member. A team always keeps at least one owner: the last owner cannot be removed, demoted or leave.
+
+| | Member | Admin | Owner |
+| --- | --- | --- | --- |
+| See the team and its members | ✓ | ✓ | ✓ |
+| Invite and remove members | | ✓ | ✓ |
+| Move a member between member and admin | | ✓ | ✓ |
+| Make, unmake or change an owner | | | ✓ |
+| Register and manage the team's applications | | ✓ | ✓ |
+| Issue team tokens, and revoke members' tokens for the team | | ✓ | ✓ |
+| Read the team's audit log, rename the team | | ✓ | ✓ |
+| Require two-step verification, transfer ownership, delete the team | | | ✓ |
+
+Nobody hands out more than they hold. An instance administrator has no rights in a team it is not a member of.
 
 An invitation names one address and one role, lasts seven days and is accepted once. Identity mails it when outgoing mail is configured and always shows the link to the inviter. Accepting requires being signed in with that address, verified.
 
-Every member of a team can enter every application registered on the instance. What a member may do inside an application is that application's decision.
+### Applications
+
+An application belongs either to the instance or to one team.
+
+- An **instance application** is registered by an instance administrator. Every account on the instance can enter it.
+- A **team application** is registered by an owner or admin of the team, under Applications in the team's pages. Only members of that team can enter it, it appears on their first screen and on nobody else's, and it learns about that team only. Anyone else who is sent to it stops at a page on Identity that says so.
+
+Registering, re-keying or deleting an application needs a second factor confirmed for the current session, as changes in the instance console do. Deleting a team deletes its applications.
+
+The instance decides whether teams may register applications, how many each, and whether a team application may live on a private network. The default allows 10 per team, on the public internet only: Identity calls the notification address of an application, so a team may not point it at a loopback, private or link-local address. A company running Identity on its own network turns "Private network allowed" on in the console.
+
+What a member may do inside an application is that application's decision.
+
+### Two-step verification for a team
+
+An owner can require two-step verification for the team. Members then confirm a code from their authenticator app before a team application opens, and owners and admins before they manage the team. Turning the requirement on ends the access members hold in the team's applications, so each of them passes the check on the way back in.
+
+### Audit log
+
+Owners and admins read the latest 200 events of their own team: membership and role changes, invitations, the team's applications, and tokens issued or revoked for the team.
 
 ## Sessions and sign-out
 
@@ -74,12 +114,17 @@ These are called by an application's server with HTTP Basic authentication, usin
 | --- | --- | --- |
 | `GET /apps/self` | | The registration: `app_id`, `name`, `issuer`, `home_url`, `callback`, `post_logout`, `notifications` |
 | `POST /apps/session` | `sub`, `sid` | `{ active: false }`, or `{ active: true, account, orgs }` |
-| `POST /apps/agent-token` | `token` | `{ active: false }`, or `{ active: true, token_id, account, org }` |
+| `POST /apps/agent-token` | `token` | `{ active: false }`, or `{ active: true, kind, token_id, account, org }` |
 | `POST /apps/service-token` | `audience` | `{ access_token, token_type, expires_in }` |
 
-**Agent access tokens** let a person's MCP client or command line act as that person in one application and one team. The person creates one in the account center, optionally with an expiry, sees it once, and can revoke it at any time. It stops working when it is revoked or expires, when the account is disabled, and when the person leaves the team.
+**Agent access tokens** come in two kinds, both bound to one application and one team and shown once when created.
 
-**Service tokens** are how one Niltavi service proves itself to another. An application exchanges its credentials for a JWT that names it in `client_id`, is addressed to one other application in `aud`, and expires after 5 minutes. The receiver verifies the signature against the issuer's JWKS and checks `iss`, `aud` and `exp`.
+- A **member token** (`kind: "member"`) lets a person's MCP client or command line act as that person. The person creates one in the account center, optionally with an expiry, and can revoke it at any time. It stops working when it is revoked or expires, when the account is disabled, and when the person leaves the team. The team's owners and admins can see and revoke the member tokens issued for their team.
+- A **team token** (`kind: "team"`) acts as the team itself, for automation that should not depend on one person. An owner or admin creates one in the team's pages, choosing whether it acts as a member or as an admin. It always expires, after at most 366 days, and it keeps working when the person who created it leaves. The answer carries `account: null`, the token's name in `token_name`, and the team with the chosen role in `org`.
+
+A team application accepts tokens for its own team only.
+
+**Service tokens** are how one Niltavi service proves itself to another. An application exchanges its credentials for a JWT that names it in `client_id`, is addressed to one other application in `aud`, and expires after 5 minutes. The receiver verifies the signature against the issuer's JWKS and checks `iss`, `aud` and `exp`. A team application can address instance applications and applications of its own team.
 
 ## Without outgoing mail
 
@@ -94,7 +139,9 @@ Without outgoing mail:
 
 ## Instance administrators
 
-The first completed self-service registration on a fresh instance creates the instance owner. Later registrations create regular accounts. The operator can also provision the owner through the setup wizard or CLI. Administrators register applications, manage accounts and change instance settings in the console at `/admin`.
+The first completed self-service registration on a fresh instance creates the instance owner. Later registrations create regular accounts. The operator can also provision the owner through the setup wizard or CLI. Administrators register instance applications, manage accounts and change instance settings in the console at `/admin`. The console carries an "Instance console" tag beside the product name, so it is never mistaken for a person's own account pages.
+
+The console lists every application with the team it belongs to, and an administrator can disable any of them. It also holds the setting for applications added by teams.
 
 An administrator can read the console after signing in. Any change requires a second factor (TOTP) that is enabled on the account and confirmed for the current session. Without it the console is read-only.
 
@@ -102,7 +149,7 @@ Registration starts open. Administrators can restrict it to team invitations or 
 
 Signing keys rotate with an overlap: `identity keys stage` publishes the next key, `identity keys activate <kid>` makes it sign, and the previous key stays published until `identity keys retire <kid>`. Restart the service after each step.
 
-The audit trail records sign-ins and failed sign-ins, password resets, membership changes, application registrations, and the issue and revocation of tokens. Passwords, codes, tokens and request parameters are never written to the audit trail or the log.
+The audit trail records sign-ins and failed sign-ins, password and address changes, membership changes, application registrations, and the issue and revocation of tokens. Passwords, codes, tokens and request parameters are never written to the audit trail or the log.
 
 ## Deployment profiles
 

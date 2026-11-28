@@ -188,7 +188,7 @@ export function Setup() {
   }
   return shell(t('Identity is ready', 'Identity 已就绪'), undefined, <>
     <p role="status">{t('People can now sign in and applications can connect.', '现在可以登录账号并接入应用了。')}</p>
-    <Notice status="accent" action={<PageLink to={{ section: 'workspace', tab: 'security' }}>{t('Turn on two-step verification', '开启两步验证')}</PageLink>}>
+    <Notice status="accent" action={<PageLink to={{ section: 'workspace', tab: 'account', hash: 'security' }}>{t('Turn on two-step verification', '开启两步验证')}</PageLink>}>
       {t('Changes in the console need two-step verification. Turn it on for the owner account now.', '在管理台进行更改需要两步验证，建议现在为所有者账号开启。')}
     </Notice>
     <PageLink to={{ section: 'admin' }}>{t('Open the instance console', '打开实例管理台')}</PageLink>

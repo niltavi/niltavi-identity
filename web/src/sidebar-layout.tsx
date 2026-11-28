@@ -3,21 +3,23 @@ import ArrowLeft from '@gravity-ui/icons/ArrowLeft';
 import Bars from '@gravity-ui/icons/Bars';
 import ShieldCheck from '@gravity-ui/icons/ShieldCheck';
 import { useLayoutEffect, useRef, useState } from 'react';
-import type { ComponentType, ReactNode, SVGProps } from 'react';
+import type { ReactNode } from 'react';
 import { AppSidebar, UserMenu } from '../vendor/niltavi-ui/templates/saas/Navigation';
+import type { SidebarGroup } from '../vendor/niltavi-ui/templates/saas/Navigation';
 import { call } from './api';
 import type { Account } from './api';
 import { container, pathFor, routeFor } from './site';
 import type { Route } from './site';
 import { TaskFeedback, useApp, useTask } from './ui';
 
-export function SidebarLayout({ title, navigation, openNavigation, route, pages, activeTab, account, children }: {
+export function SidebarLayout({ title, navigation, openNavigation, route, groups, activeHref, account, children }: {
   title: string;
   navigation: string;
   openNavigation: string;
   route: Route;
-  pages: { id: string | undefined; label: string; icon: ComponentType<SVGProps<SVGSVGElement>> }[];
-  activeTab: string | undefined;
+  groups: SidebarGroup[];
+  // The sidebar entry to mark as current, which is not always the address of the page shown.
+  activeHref: string;
   account: Account;
   children: ReactNode;
 }) {
@@ -28,9 +30,11 @@ export function SidebarLayout({ title, navigation, openNavigation, route, pages,
   const isAdmin = section === 'admin';
   const contentRef = useRef<HTMLElement>(null);
   const contentPath = pathFor(route);
+  // A new page starts at its top, or at the part of the page the address names.
   useLayoutEffect(() => {
     if (contentRef.current) contentRef.current.scrollTop = 0;
-  }, [contentPath]);
+    if (route.hash) document.getElementById(route.hash)?.scrollIntoView({ block: 'start' });
+  }, [contentPath, route.hash]);
 
   function followSidebarLink(href: string) {
     const { pathname, search } = new URL(href, window.location.href);
@@ -41,8 +45,7 @@ export function SidebarLayout({ title, navigation, openNavigation, route, pages,
   const destination = isAdmin
     ? { section: 'workspace' as const, label: t('Account center', '账号中心'), icon: ArrowLeft }
     : account.instanceRole && { section: 'admin' as const, label: t('Instance console', '实例管理台'), icon: ShieldCheck };
-  const sidebar = <AppSidebar label={navigation} activeHref={pathFor({ language, section, tab: activeTab })}
-    items={pages.map(({ id, label, icon }) => ({ href: pathFor({ language, section, tab: id }), label, icon }))}
+  const sidebar = <AppSidebar label={navigation} activeHref={activeHref} groups={groups}
     footer={<UserMenu name={account.name} email={account.email} label={t('Account menu', '账号菜单')}
       signOutLabel={t('Sign out', '退出登录')} isPending={Boolean(signOut.pending)} onSignOut={() => {
         setDrawerOpen(false);

@@ -5,6 +5,7 @@ import { digest, readBrowserCookie, setBrowserCookie } from './browser-cookie.js
 import {
   PasswordRejected, openClientSecret, passwordHash, passwordProblem, passwordRule, sealClientSecret, totpSecret, totpStep, verifyAccountPassword,
 } from './credentials.js';
+import { deletionBlockers, deletionGraceSeconds } from './account-deletion.js';
 import {
   applyAccountEnabled, audit, getLogin, getSetting, issueAccountLink, loginRateAllowed, rateAllowed, transaction,
 } from './database.js';
@@ -45,7 +46,8 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
   app.get('/account/config', async () => {
     const [ready, codes, general, policy, applications] = await Promise.all([
       getSetting<boolean>(pool, 'initialized'), mailer.codes(), mailer.general(), registrationPolicy(pool),
-      pool.query<{ id: string; name: string; url: string }>('SELECT id, name, home_url AS url FROM applications WHERE enabled ORDER BY name, id'),
+      pool.query<{ id: string; name: string; url: string }>(// Anyone can read this, so it names the instance's applications and never a team's.
+      'SELECT id, name, home_url AS url FROM applications WHERE enabled AND org_id IS NULL ORDER BY name, id'),
     ]);
     return {
       initialized: Boolean(ready),
@@ -61,8 +63,9 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
   app.get('/account/session', async (request, reply) => {
     const current = await web.viewer(request);
     if (current) {
-      const { key: _key, sessionId: _session, ...account } = current;
-      return { account };
+      const { key: _key, sessionId: _session, deletionRequestedAt, ...account } = current;
+      const deletionAt = deletionRequestedAt && new Date(deletionRequestedAt.getTime() + deletionGraceSeconds * 1_000);
+      return { account: { ...account, deletionAt } };
     }
     if (web.cookieKey(request)) web.clear(reply);
     return failure(reply, 401, 'sign_in_required');
@@ -275,6 +278,151 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     if (locale === undefined || !['', 'en', 'zh-CN'].includes(locale)) return failure(reply, 400, 'invalid_request');
     await pool.query('UPDATE accounts SET locale = $2 WHERE id = $1', [viewer.id, locale || null]);
     return reply.code(204).send();
+  });
+
+  // Every application this account may enter: the instance's, and those of its teams.
+  // "joined" means the account has signed in to it before, "authorized" that it holds access right now.
+  app.get('/account/apps', async (request, reply) => {
+    const viewer = await web.viewer(request);
+    if (!viewer) return failure(reply, 401, 'sign_in_required');
+    const [all, authorized] = await Promise.all([
+      pool.query<{ id: string; name: string; url: string; logoUrl: string | null; teamId: string | null; team: string | null; lastSeenAt: Date | null }>(
+        `SELECT p.id, p.name, p.home_url AS url, p.sign_in_logo_url AS "logoUrl", p.org_id AS "teamId", o.name AS team, s.last_seen_at AS "lastSeenAt"
+         FROM applications p LEFT JOIN orgs o ON o.id = p.org_id
+           LEFT JOIN application_accounts s ON s.app_id = p.id AND s.account_id = $1
+         WHERE p.enabled AND (p.org_id IS NULL OR EXISTS (SELECT 1 FROM memberships m WHERE m.org_id = p.org_id AND m.account_id = $1))
+         ORDER BY s.last_seen_at DESC NULLS LAST, p.name, p.id`, [viewer.id]),
+      store.applications(viewer.id),
+    ]);
+    const live = new Set(authorized.map(({ id }) => id));
+    return { applications: all.rows.map(({ team, teamId, lastSeenAt, ...app }) => ({
+      ...app, owner: teamId === null ? { kind: 'instance' } : { kind: 'team', id: teamId, name: team },
+      joined: lastSeenAt !== null || live.has(app.id), authorized: live.has(app.id), lastSeenAt })) };
+  });
+
+  // Changing the password signs every other device out and keeps this browser signed in.
+  app.post('/account/password', guard, async (request, reply) => {
+    const viewer = await web.viewer(request);
+    if (!viewer) return failure(reply, 401, 'sign_in_required');
+    const [current, password] = fields(request, 'current', 'password') ?? [];
+    if (!current || !password) return failure(reply, 400, 'invalid_request');
+    if (!await loginRateAllowed(pool, request.ip, viewer.email, 'change-password', 5)) return failure(reply, 429, 'try_later');
+    const account = await getLogin(pool, viewer.email);
+    const authentic = await verifyAccountPassword(current, account?.password_hash, backupHash);
+    if (!authentic || !account?.enabled || account.id !== viewer.id) return failure(reply, 403, 'incorrect_password');
+    let hash: string;
+    try { hash = await passwordHash(password, viewer.email); }
+    catch (error) { return failure(reply, 400, passwordFailure(error)); }
+    const token = await transaction(pool, async (db) => {
+      const changed = (await db.query<{ security_epoch: number }>(
+        `UPDATE accounts SET password_hash = $2, security_epoch = security_epoch + 1
+          WHERE id = $1 AND enabled AND security_epoch = $3 RETURNING security_epoch`, [viewer.id, hash, account.security_epoch])).rows[0];
+      if (!changed) return undefined;
+      await db.query('DELETE FROM oidc_records WHERE account_id = $1', [viewer.id]);
+      await db.query('DELETE FROM web_sessions WHERE account_id = $1', [viewer.id]);
+      await audit(db, 'account.password_changed', viewer.id, viewer.id);
+      return web.issue(db, viewer.id, changed.security_epoch, request);
+    });
+    if (!token) return failure(reply, 401, 'sign_in_required');
+    notifier.account(viewer.id);
+    web.grant(reply, token);
+    return { changed: true };
+  });
+
+  // Proof that the person at the keyboard owns the account: the password, or for an account
+  // without one, a sign-in within the last ten minutes, which took a code from its mailbox.
+  async function confirmedOwner(request: FastifyRequest, viewer: NonNullable<Awaited<ReturnType<typeof web.viewer>>>, password: string | undefined, purpose: string) {
+    if (!viewer.hasPassword) return Date.now() - new Date(viewer.signedInAt).getTime() < 600_000 ? undefined : 'recent_sign_in_required';
+    if (!password) return 'incorrect_password';
+    if (!await loginRateAllowed(pool, request.ip, viewer.email, purpose, 5)) return 'try_later';
+    const account = await getLogin(pool, viewer.email);
+    const authentic = await verifyAccountPassword(password, account?.password_hash, backupHash);
+    return authentic && account?.enabled && account.id === viewer.id ? undefined : 'incorrect_password';
+  }
+  const refusalStatus = (code: string) => code === 'try_later' ? 429 : 403;
+
+  const emailChangeCookie = '__Host-niltavi-email-change';
+  const emailChangeSeconds = 900;
+
+  // The code goes to the new address. The account keeps its current one until the code comes back.
+  app.post('/account/email/change', guard, async (request, reply) => {
+    const viewer = await web.viewer(request);
+    if (!viewer) return failure(reply, 401, 'sign_in_required');
+    const [address, password] = fields(request, 'email', 'password') ?? fields(request, 'email') ?? [];
+    let email: string;
+    try { email = mailAddress(address ?? ''); }
+    catch { return failure(reply, 400, 'invalid_email'); }
+    if (email === viewer.email) return failure(reply, 400, 'invalid_email');
+    if (!await mailer.codes()) return failure(reply, 503, 'delivery_unavailable');
+    const refused = await confirmedOwner(request, viewer, password, 'change-email');
+    if (refused) return failure(reply, refusalStatus(refused), refused);
+    if (!await rateAllowed(pool, [[`change-email:${viewer.id}`, 3, 900], [`change-email:address:${email}`, 5, 3_600]])) {
+      return failure(reply, 429, 'try_later');
+    }
+    const enrollment = randomBytes(32).toString('base64url');
+    const code = verificationCode();
+    await pool.query('DELETE FROM email_changes WHERE expires_at <= now()');
+    await pool.query(`INSERT INTO email_changes (account_id, token_digest, email, expires_at, next_resend_at)
+      VALUES ($1, $2, $3, now() + $4 * interval '1 second', now() + $5 * interval '1 second')
+      ON CONFLICT (account_id) DO UPDATE SET token_digest = EXCLUDED.token_digest, email = EXCLUDED.email,
+        attempts = 0, expires_at = EXCLUDED.expires_at, next_resend_at = EXCLUDED.next_resend_at`,
+    [viewer.id, codeKey(enrollment, code), email, emailChangeSeconds, resendSeconds]);
+    // An address that already has an account gets no code, and the reply does not say so.
+    mailer.later(async () => { if (!await getLogin(pool, email)) await mailer.sendCode(email, code); });
+    setBrowserCookie(reply, emailChangeCookie, enrollment, emailChangeSeconds);
+    return reply.code(202).send({ accepted: true, email });
+  });
+
+  app.post('/account/email/change/resend', guard, async (request, reply) => {
+    const viewer = await web.viewer(request);
+    if (!viewer) return failure(reply, 401, 'sign_in_required');
+    if (!fields(request)) return failure(reply, 400, 'unexpected_body');
+    if (!await mailer.codes()) return failure(reply, 503, 'delivery_unavailable');
+    if (!await rateAllowed(pool, [[`change-email:${viewer.id}`, 3, 900]])) return failure(reply, 429, 'try_later');
+    const enrollment = randomBytes(32).toString('base64url');
+    const code = verificationCode();
+    const changed = (await pool.query<{ email: string }>(
+      `UPDATE email_changes SET token_digest = $1, attempts = 0,
+          expires_at = now() + $2 * interval '1 second', next_resend_at = now() + $3 * interval '1 second'
+        WHERE account_id = $4 AND expires_at > now() AND next_resend_at <= now() RETURNING email`,
+      [codeKey(enrollment, code), emailChangeSeconds, resendSeconds, viewer.id])).rows[0];
+    if (!changed) return failure(reply.header('retry-after', String(resendSeconds)), 429, 'resend_wait');
+    mailer.later(async () => { if (!await getLogin(pool, changed.email)) await mailer.sendCode(changed.email, code); });
+    setBrowserCookie(reply, emailChangeCookie, enrollment, emailChangeSeconds);
+    return reply.code(202).send({ accepted: true });
+  });
+
+  app.post('/account/email/change/confirm', guard, async (request, reply) => {
+    const viewer = await web.viewer(request);
+    if (!viewer) return failure(reply, 401, 'sign_in_required');
+    const [code] = fields(request, 'code') ?? [];
+    const enrollment = readBrowserCookie(request, emailChangeCookie);
+    if (!enrollment || !code || !/^\d{6}$/.test(code)) return failure(reply, 400, 'invalid_code');
+    if (!await rateAllowed(pool, [[`change-email-attempt:${viewer.id}`, 12], [`change-email-day:${viewer.id}`, 30, 86_400]])) {
+      return failure(reply, 429, 'try_later');
+    }
+    const email = await transaction(pool, async (db) => {
+      const row = (await db.query<{ email: string }>(
+        `DELETE FROM email_changes WHERE account_id = $1 AND token_digest = $2 AND expires_at > now() AND attempts < $3 RETURNING email`,
+        [viewer.id, codeKey(enrollment, code), codeAttempts])).rows[0];
+      if (!row) return undefined;
+      // The address may have been taken while the code was in transit.
+      const account = await db.query(`UPDATE accounts SET email = $2, email_verified_at = now()
+        WHERE id = $1 AND enabled AND NOT EXISTS (SELECT 1 FROM accounts other WHERE other.email = $2)`, [viewer.id, row.email]);
+      if (!account.rowCount) return undefined;
+      await db.query('DELETE FROM account_links WHERE account_id = $1', [viewer.id]);
+      await audit(db, 'account.email_changed', viewer.id, viewer.id);
+      return row.email;
+    });
+    if (!email) {
+      await pool.query('UPDATE email_changes SET attempts = attempts + 1 WHERE account_id = $1', [viewer.id]);
+      return failure(reply, 400, 'invalid_code');
+    }
+    setBrowserCookie(reply, emailChangeCookie, '', 0);
+    if (viewer.emailVerified && await mailer.general()) mailer.later(() => mailer.send(viewer.email, messages.emailChanged(email)));
+    // Applications refresh what they hold about the account.
+    notifier.membership(viewer.id);
+    return { email };
   });
 
   app.get('/account/applications', async (request, reply) => {
@@ -643,13 +791,14 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     const token = 'nvt_' + randomBytes(32).toString('base64url');
     const id = randomUUID();
     const created = await transaction(pool, async (db) => {
+      // A team's application takes tokens for that team only.
       const allowed = await db.query(`SELECT 1 FROM applications p, memberships m
-        WHERE p.id = $1 AND p.enabled AND m.org_id = $2 AND m.account_id = $3`, [appId, org, viewer.id]);
+        WHERE p.id = $1 AND p.enabled AND m.org_id = $2 AND m.account_id = $3 AND (p.org_id IS NULL OR p.org_id = $2)`, [appId, org, viewer.id]);
       if (!allowed.rowCount) return false;
       await db.query(`INSERT INTO agent_tokens (id, token_digest, account_id, app_id, org_id, name, hint, expires_at)
         VALUES ($1, $2, $3, $4, $5, $6, $7, now() + $8 * interval '1 day')`,
       [id, digest(token), viewer.id, appId, org, name, token.slice(-4), lifetime]);
-      await audit(db, 'agent_token.issued', id, viewer.id, appId);
+      await audit(db, 'agent_token.issued', id, viewer.id, appId, org);
       return true;
     });
     if (!created) return failure(reply, 400, 'invalid_token_request');
@@ -662,9 +811,10 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     if (!viewer) return failure(reply, 401, 'sign_in_required');
     if (!fields(request)) return failure(reply, 400, 'unexpected_body');
     const revoked = await transaction(pool, async (db) => {
-      const changed = await db.query('UPDATE agent_tokens SET revoked_at = now() WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL',
+      const changed = await db.query<{ org_id: string }>(
+        'UPDATE agent_tokens SET revoked_at = now() WHERE id = $1 AND account_id = $2 AND revoked_at IS NULL RETURNING org_id',
         [request.params.id, viewer.id]);
-      if (changed.rowCount) await audit(db, 'agent_token.revoked', request.params.id, viewer.id);
+      if (changed.rowCount) await audit(db, 'agent_token.revoked', request.params.id, viewer.id, undefined, changed.rows[0]?.org_id);
       return Boolean(changed.rowCount);
     });
     return revoked ? reply.code(204).send() : failure(reply, 404, 'token_not_found');
@@ -706,11 +856,17 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     return reply.code(204).send();
   });
 
+  // Confirms the second factor on this session. Also used on the way into a team's application.
+  async function confirmSecondFactor(viewer: { id: string; key: string }, code: string | undefined) {
+    if (!await secondFactor(viewer.id, code, true)) return false;
+    await pool.query('UPDATE web_sessions SET second_factor_at = now() WHERE token_digest = $1', [viewer.key]);
+    return true;
+  }
+
   app.post('/account/second-factor/verify', guard, async (request, reply) => {
     const viewer = await web.viewer(request);
     if (!viewer) return failure(reply, 401, 'sign_in_required');
-    if (!await secondFactor(viewer.id, fields(request, 'code')?.[0], true)) return failure(reply, 400, 'invalid_code');
-    await pool.query('UPDATE web_sessions SET second_factor_at = now() WHERE token_digest = $1', [viewer.key]);
+    if (!await confirmSecondFactor(viewer, fields(request, 'code')?.[0])) return failure(reply, 400, 'invalid_code');
     return reply.code(204).send();
   });
 
@@ -724,12 +880,19 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
     return reply.code(204).send();
   });
 
-  // Deleting an account is an administrator action. The user can only ask for it.
+  // The account asks, waits out the grace period, and is then deleted without an administrator.
+  // It can withdraw the request at any point before that.
   app.post('/account/deletion-request', guard, async (request, reply) => {
     const viewer = await web.viewer(request);
     if (!viewer) return failure(reply, 401, 'sign_in_required');
-    const [state] = fields(request, 'state') ?? [];
+    const [state, password] = fields(request, 'state', 'password') ?? fields(request, 'state') ?? [];
     if (state !== 'requested' && state !== 'withdrawn') return failure(reply, 400, 'invalid_state');
+    if (state === 'requested' && !viewer.deletionRequested) {
+      const refused = await confirmedOwner(request, viewer, password, 'delete-account');
+      if (refused) return failure(reply, refusalStatus(refused), refused);
+      const blocked = await deletionBlockers(pool, viewer.id);
+      if (blocked) return reply.code(409).send({ error: blocked.reason, teams: blocked.teams });
+    }
     const changed = await pool.query(
       `UPDATE accounts SET deletion_requested_at = CASE WHEN $2 THEN now() END
         WHERE id = $1 AND (deletion_requested_at IS NULL) = $2`, [viewer.id, state === 'requested']);
@@ -770,5 +933,5 @@ export async function registerBrowserAuth(app: FastifyInstance, services: Accoun
       return result ? { enabled: result.enabled, changed: result.changed } : failure(reply, 403, 'account_not_managed');
     });
   }
-  return { requestLoginCode, verifyLoginCode, passwordlessAvailable: mailer.codes, registerAccount, pendingEnrollment, verifyEnrollment, resendEnrollment };
+  return { requestLoginCode, verifyLoginCode, confirmSecondFactor, passwordlessAvailable: mailer.codes, registerAccount, pendingEnrollment, verifyEnrollment, resendEnrollment };
 }
